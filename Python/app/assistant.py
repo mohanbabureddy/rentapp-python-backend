@@ -1,0 +1,90 @@
+import logging
+import os
+from typing import List, Optional
+
+import anthropic
+
+from app.models import TenantBill, User
+from app.repositories import TenantBillRepository, UserRepository
+
+logger = logging.getLogger("app.assistant")
+
+MODEL = "claude-opus-5"
+
+
+class AssistantService:
+    """Answers a tenant's free-form questions (e.g. "who do I pay rent to") using
+    only that tenant's own bill data -- never another tenant's, and never anything
+    fabricated (bank/UPI details the app doesn't actually have on file)."""
+
+    def __init__(self, bill_repo: TenantBillRepository, user_repo: UserRepository):
+        self.bill_repo = bill_repo
+        self.user_repo = user_repo
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        self._client = anthropic.Anthropic(api_key=api_key) if api_key else None
+
+    def _admin_contact(self) -> Optional[User]:
+        for user in self.user_repo.find_all():
+            if user.role == "ADMIN":
+                return user
+        return None
+
+    def _build_system_prompt(self, tenant: User, bills: List[TenantBill]) -> str:
+        admin = self._admin_contact()
+        recent = sorted(bills, key=lambda b: b.month_year or "", reverse=True)[:12]
+        bill_lines = []
+        for b in recent:
+            total = (b.rent or 0) + (b.water or 0) + (b.electricity or 0)
+            status = "PAID" if b.paid else "UNPAID"
+            bill_lines.append(
+                f"- {b.month_year}: rent=Rs.{b.rent or 0}, water=Rs.{b.water or 0}, "
+                f"electricity=Rs.{b.electricity or 0}, total=Rs.{total}, status={status}"
+            )
+        bills_block = "\n".join(bill_lines) if bill_lines else "No bills on record."
+
+        admin_block = (
+            f"Property manager / admin contact: username={admin.username}, "
+            f"email={admin.mail or 'not on file'}, phone={admin.phone or 'not on file'}."
+            if admin else "No admin contact is on file."
+        )
+
+        return (
+            "You are a helpful assistant inside a rent management app, answering only "
+            f"for the tenant '{tenant.username}'. Use ONLY the data below -- never invent "
+            "bank account numbers, UPI IDs, or any payment detail that isn't given here. "
+            "Rent is paid entirely inside this app via the 'Pay Now' button on the tenant's "
+            "Bills page (a Razorpay checkout popup); there is no separate bank transfer or "
+            "UPI payment to make. If asked something this data doesn't cover, say so honestly "
+            "instead of guessing. Keep answers short and direct.\n\n"
+            f"{admin_block}\n\n"
+            f"Tenant's bill history (most recent first):\n{bills_block}"
+        )
+
+    def ask(self, username: str, message: str) -> str:
+        if self._client is None:
+            raise RuntimeError("The assistant isn't configured yet (missing ANTHROPIC_API_KEY in .env).")
+        if not message or not message.strip():
+            raise ValueError("Message required")
+
+        tenant = self.user_repo.find_by_username(username)
+        if tenant is None:
+            raise ValueError("Tenant not found")
+        bills = self.bill_repo.find_by_tenant_name_order_by_month_desc(username)
+        system_prompt = self._build_system_prompt(tenant, bills)
+
+        logger.info("Assistant question from '%s': %s", username, message[:200])
+        try:
+            response = self._client.messages.create(
+                model=MODEL,
+                max_tokens=1024,
+                system=system_prompt,
+                output_config={"effort": "low"},
+                messages=[{"role": "user", "content": message.strip()}],
+            )
+        except anthropic.APIError:
+            logger.exception("Assistant API call failed for '%s'.", username)
+            raise RuntimeError("Assistant is temporarily unavailable. Please try again shortly.")
+
+        answer = next((block.text for block in response.content if block.type == "text"), "")
+        logger.info("Assistant answered '%s' (%d chars).", username, len(answer))
+        return answer

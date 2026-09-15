@@ -1,0 +1,124 @@
+from typing import List, Optional
+
+from sqlalchemy.orm import Session
+
+from app.models import Complaint, Occupant, TenantBill, TransactionLog, User
+
+
+class UserRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def find_by_username(self, username: str) -> Optional[User]:
+        return self.db.query(User).filter(User.username == username).first()
+
+    def find_by_id(self, user_id: int) -> Optional[User]:
+        return self.db.query(User).filter(User.id == user_id).first()
+
+    def find_all(self) -> List[User]:
+        return self.db.query(User).all()
+
+    def save(self, user: User) -> User:
+        self.db.add(user)
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
+    def delete_by_id(self, user_id: int) -> None:
+        user = self.find_by_id(user_id)
+        if user is not None:
+            self.db.delete(user)
+            self.db.commit()
+
+    def exists_by_id(self, user_id: int) -> bool:
+        return self.find_by_id(user_id) is not None
+
+    def find_tenant_usernames(self) -> List[str]:
+        return [u.username for u in self.db.query(User).filter(User.role == "TENANT").all()]
+
+
+class TenantBillRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def find_by_tenant_name_order_by_month_desc(self, tenant_name: str) -> List[TenantBill]:
+        return self.db.query(TenantBill).filter(TenantBill.tenant_name == tenant_name).order_by(TenantBill.month_year.desc()).all()
+
+    def find_by_tenant_name_and_month(self, tenant_name: str, month_year: str) -> Optional[TenantBill]:
+        return self.db.query(TenantBill).filter(TenantBill.tenant_name == tenant_name, TenantBill.month_year == month_year).first()
+
+    def find_by_paid_true_and_month(self, month_year: str) -> List[TenantBill]:
+        return self.db.query(TenantBill).filter(TenantBill.paid == True, TenantBill.month_year == month_year).all()  # noqa: E712 (paid is BitBoolean/Integer-backed; == compiles to "= 1", .is_() emits "IS 1" which MySQL rejects)
+
+    def find_all(self) -> List[TenantBill]:
+        return self.db.query(TenantBill).order_by(TenantBill.month_year.desc()).all()
+
+    def find_by_id(self, bill_id: int) -> Optional[TenantBill]:
+        return self.db.query(TenantBill).filter(TenantBill.id == bill_id).first()
+
+    def save(self, bill: TenantBill) -> TenantBill:
+        self.db.add(bill)
+        self.db.commit()
+        self.db.refresh(bill)
+        return bill
+
+    def delete_by_id(self, bill_id: int) -> None:
+        bill = self.find_by_id(bill_id)
+        if bill is not None:
+            self.db.delete(bill)
+            self.db.commit()
+
+
+class ComplaintRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def save(self, complaint: Complaint) -> Complaint:
+        self.db.add(complaint)
+        self.db.commit()
+        self.db.refresh(complaint)
+        return complaint
+
+    def find_by_tenant_name_order_by_created_desc(self, tenant_name: str) -> List[Complaint]:
+        return self.db.query(Complaint).filter(Complaint.tenant_name == tenant_name).order_by(Complaint.created_date.desc()).all()
+
+    def find_all_order_by_created_desc(self) -> List[Complaint]:
+        return self.db.query(Complaint).order_by(Complaint.created_date.desc()).all()
+
+    def find_by_id(self, complaint_id: int) -> Optional[Complaint]:
+        return self.db.query(Complaint).filter(Complaint.id == complaint_id).first()
+
+
+class TransactionLogRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def save(self, log: TransactionLog) -> TransactionLog:
+        self.db.add(log)
+        self.db.commit()
+        self.db.refresh(log)
+        return log
+
+
+class OccupantRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def find_by_tenant_username_order_by_uploaded_desc(self, tenant_username: str) -> List[Occupant]:
+        return self.db.query(Occupant).filter(Occupant.tenant_username == tenant_username).order_by(Occupant.uploaded_at.desc()).all()
+
+    def find_all_order_by_uploaded_desc(self) -> List[Occupant]:
+        return self.db.query(Occupant).order_by(Occupant.uploaded_at.desc()).all()
+
+    def find_by_id(self, occupant_id: int) -> Optional[Occupant]:
+        return self.db.query(Occupant).filter(Occupant.id == occupant_id).first()
+
+    def save(self, occupant: Occupant) -> Occupant:
+        self.db.add(occupant)
+        self.db.commit()
+        self.db.refresh(occupant)
+        return occupant
+
+    def delete(self, occupant: Occupant) -> None:
+        self.db.delete(occupant)
+        self.db.commit()
