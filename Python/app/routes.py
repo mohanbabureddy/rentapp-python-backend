@@ -108,7 +108,11 @@ def register_routes(app: Flask) -> None:
 
         user.mail = email.strip()
         repo.save(user)
-        otp_service.generate_otp(user.mail)
+        try:
+            otp_service.generate_otp(user.mail)
+        except Exception:
+            logger.exception("Registration start failed: could not send OTP email to %s.", user.mail)
+            return jsonify({"error": "Could not send OTP email. Please try again shortly."}), 502
         logger.info("Registration started for '%s'; OTP sent to %s.", username, user.mail)
         return jsonify({"message": "OTP sent to email"}), 200
 

@@ -398,12 +398,12 @@ class EmailService:
         )
         try:
             if settings["use_ssl"]:
-                with smtplib.SMTP_SSL(settings["server"], settings["port"]) as smtp:
+                with smtplib.SMTP_SSL(settings["server"], settings["port"], timeout=10) as smtp:
                     if settings["username"]:
                         smtp.login(settings["username"], settings["password"])
                     smtp.send_message(message)
             else:
-                with smtplib.SMTP(settings["server"], settings["port"]) as smtp:
+                with smtplib.SMTP(settings["server"], settings["port"], timeout=10) as smtp:
                     if settings["use_tls"]:
                         smtp.starttls()
                     if settings["username"]:
