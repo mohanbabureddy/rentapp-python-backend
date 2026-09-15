@@ -30,7 +30,16 @@ file_handler = RotatingFileHandler(
 )
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+
+# Render's log viewer (and most hosts) only captures stdout/stderr -- the log file
+# above lives on ephemeral disk that's invisible without Shell access, so without
+# this handler every exception logged here would be silently unobservable in prod.
+stream_handler = logging.StreamHandler(sys.stdout)
+stream_handler.setLevel(logging.DEBUG)
+stream_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+
 app.logger.addHandler(file_handler)
+app.logger.addHandler(stream_handler)
 app.logger.setLevel(logging.DEBUG)
 app.logger.propagate = False
 
@@ -38,6 +47,8 @@ root_logger = logging.getLogger()
 root_logger.setLevel(logging.DEBUG)
 if not any(isinstance(h, RotatingFileHandler) and getattr(h, "baseFilename", "") == file_handler.baseFilename for h in root_logger.handlers):
     root_logger.addHandler(file_handler)
+if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, RotatingFileHandler) for h in root_logger.handlers):
+    root_logger.addHandler(stream_handler)
 
 CORS(
     app,
