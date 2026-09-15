@@ -5,3 +5,4 @@ __pycache__/
 logs/
 uploads/
 tenant_billing.db
+aiven-ca.pem
