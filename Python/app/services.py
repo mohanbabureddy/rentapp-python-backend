@@ -3,6 +3,7 @@ import os
 import random
 import re
 import smtplib
+import socket
 import time
 from datetime import date, datetime
 from email.message import EmailMessage
@@ -16,6 +17,42 @@ from app.models import Complaint, Occupant, TenantBill, TransactionLog, User
 from app.repositories import ComplaintRepository, OccupantRepository, TenantBillRepository, TransactionLogRepository, UserRepository
 
 UPLOADS_ROOT = Path(__file__).resolve().parents[1] / "uploads"
+
+
+def _create_ipv4_connection(address, timeout, source_address=None):
+    """Like socket.create_connection, but restricted to IPv4. Render's containers
+    have no IPv6 route, yet smtp.gmail.com also publishes an AAAA record -- the
+    stdlib tries every resolved address including IPv6, which fails immediately
+    with OSError [Errno 101] Network unreachable instead of falling back to the
+    IPv4 address that actually works."""
+    host, port = address
+    err = None
+    for family, socktype, proto, _, sockaddr in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM):
+        sock = None
+        try:
+            sock = socket.socket(family, socktype, proto)
+            if timeout is not None:
+                sock.settimeout(timeout)
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(sockaddr)
+            return sock
+        except OSError as exc:
+            err = exc
+            if sock is not None:
+                sock.close()
+    raise err if err is not None else OSError("getaddrinfo returned no IPv4 addresses")
+
+
+class _IPv4SMTP(smtplib.SMTP):
+    def _get_socket(self, host, port, timeout):
+        return _create_ipv4_connection((host, port), timeout, self.source_address)
+
+
+class _IPv4SMTP_SSL(smtplib.SMTP_SSL):
+    def _get_socket(self, host, port, timeout):
+        sock = _create_ipv4_connection((host, port), timeout, self.source_address)
+        return self.context.wrap_socket(sock, server_hostname=self._host)
 
 
 def to_iso_utc(dt: Optional[datetime]) -> Optional[str]:
@@ -398,12 +435,12 @@ class EmailService:
         )
         try:
             if settings["use_ssl"]:
-                with smtplib.SMTP_SSL(settings["server"], settings["port"], timeout=10) as smtp:
+                with _IPv4SMTP_SSL(settings["server"], settings["port"], timeout=10) as smtp:
                     if settings["username"]:
                         smtp.login(settings["username"], settings["password"])
                     smtp.send_message(message)
             else:
-                with smtplib.SMTP(settings["server"], settings["port"], timeout=10) as smtp:
+                with _IPv4SMTP(settings["server"], settings["port"], timeout=10) as smtp:
                     if settings["use_tls"]:
                         smtp.starttls()
                     if settings["username"]:
