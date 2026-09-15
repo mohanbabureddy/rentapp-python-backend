@@ -1,4 +1,5 @@
 import os
+import tempfile
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -12,7 +13,21 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL") or "sqlite:///tenant_billing.db"
 
-connect_args = {"check_same_thread": False} if DB_URL.startswith("sqlite") else {}
+# PyMySQL has no "ssl_mode" URL param (that's a MySQL Connector/Python-ism) --
+# TLS has to be requested via connect_args instead. DB_SSL_CA holds the PEM
+# certificate content (e.g. Aiven's CA cert) directly, since Render env vars
+# can't reference a file path on disk.
+_ssl_ca_pem = os.getenv("DB_SSL_CA")
+if DB_URL.startswith("sqlite"):
+    connect_args = {"check_same_thread": False}
+elif _ssl_ca_pem:
+    ca_file = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
+    ca_file.write(_ssl_ca_pem)
+    ca_file.close()
+    connect_args = {"ssl": {"ca": ca_file.name}}
+else:
+    connect_args = {}
+
 engine = create_engine(DB_URL, connect_args=connect_args, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
