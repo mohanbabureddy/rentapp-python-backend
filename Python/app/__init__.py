@@ -46,6 +46,7 @@ CORS(
         "https://vgrpay.uk",
         "https://d8aff7a8.rentapp1.pages.dev",
         "https://rentappfrontend-2.onrender.com",
+        "https://rentappfrontend.onrender.com",
     ]}},
 )
 
