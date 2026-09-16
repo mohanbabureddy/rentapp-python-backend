@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from flask import Flask, g, jsonify, request, send_from_directory
@@ -20,6 +22,19 @@ logger = logging.getLogger("app.auth")
 def register_routes(app: Flask) -> None:
     email_service = EmailService()
     otp_service = OTPService(email_service)
+    started_at = datetime.now(timezone.utc).isoformat()
+
+    @app.route("/api/version", methods=["GET"])
+    def get_version():
+        # RENDER_GIT_COMMIT/RENDER_GIT_BRANCH are auto-injected by Render on
+        # every deploy -- no manual version bump needed, this always reflects
+        # exactly what commit is actually running.
+        commit = os.getenv("RENDER_GIT_COMMIT", "local-dev")
+        return jsonify({
+            "commit": commit[:7] if commit != "local-dev" else commit,
+            "branch": os.getenv("RENDER_GIT_BRANCH", "unknown"),
+            "startedAt": started_at,
+        }), 200
 
     @app.route("/api/auth/login", methods=["POST"])
     def auth_login():
