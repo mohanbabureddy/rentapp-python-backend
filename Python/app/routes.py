@@ -127,7 +127,7 @@ def register_routes(app: Flask) -> None:
         try:
             otp_service.generate_otp(user.mail)
         except OTPCooldownError as exc:
-            return jsonify({"error": str(exc)}), 429
+            return jsonify({"error": str(exc), "retryAfterSeconds": exc.retry_after_seconds}), 429
         except Exception:
             logger.exception("Registration start failed: could not send OTP email to %s.", user.mail)
             return jsonify({"error": "Could not send OTP email. Please try again shortly."}), 502
@@ -209,7 +209,7 @@ def register_routes(app: Flask) -> None:
         try:
             otp_service.generate_otp(user.mail)
         except OTPCooldownError as exc:
-            return jsonify({"error": str(exc)}), 429
+            return jsonify({"error": str(exc), "retryAfterSeconds": exc.retry_after_seconds}), 429
         except Exception:
             logger.exception("Forgot-password failed: could not send OTP email to %s.", user.mail)
             return jsonify({"error": "Could not send OTP email. Please try again shortly."}), 502
