@@ -14,7 +14,7 @@ from app.database import get_db
 from app.models import Complaint, Occupant, TenantBill, User
 from app.payments import PaymentService
 from app.repositories import ComplaintRepository, OccupantRepository, TenantBillRepository, TransactionLogRepository, UserRepository
-from app.services import UPLOADS_ROOT, ComplaintService, EmailService, OccupantService, OTPService, TenantBillService, TransactionService, UserService, to_iso_utc, verify_password
+from app.services import UPLOADS_ROOT, ComplaintService, EmailService, OccupantService, OTPCooldownError, OTPService, TenantBillService, TransactionService, UserService, to_iso_utc, verify_password
 
 logger = logging.getLogger("app.auth")
 
@@ -125,6 +125,8 @@ def register_routes(app: Flask) -> None:
         repo.save(user)
         try:
             otp_service.generate_otp(user.mail)
+        except OTPCooldownError as exc:
+            return jsonify({"error": str(exc)}), 429
         except Exception:
             logger.exception("Registration start failed: could not send OTP email to %s.", user.mail)
             return jsonify({"error": "Could not send OTP email. Please try again shortly."}), 502
@@ -203,7 +205,13 @@ def register_routes(app: Flask) -> None:
             logger.warning("Forgot-password rejected for '%s': no email on file.", username)
             return jsonify({"error": "No email registered"}), 400
 
-        otp_service.generate_otp(user.mail)
+        try:
+            otp_service.generate_otp(user.mail)
+        except OTPCooldownError as exc:
+            return jsonify({"error": str(exc)}), 429
+        except Exception:
+            logger.exception("Forgot-password failed: could not send OTP email to %s.", user.mail)
+            return jsonify({"error": "Could not send OTP email. Please try again shortly."}), 502
         logger.info("Password-reset OTP sent to %s for user '%s'.", user.mail, username)
         return jsonify({"message": "OTP sent"}), 200
 
@@ -420,7 +428,10 @@ def register_routes(app: Flask) -> None:
         db = get_db()
         repo = TenantBillRepository(db)
         service = TenantBillService(repo, UserRepository(db), email_service)
-        return jsonify({"message": service.delete_bill(bill_id)}), 200
+        try:
+            return jsonify({"message": service.delete_bill(bill_id)}), 200
+        except PermissionError as exc:
+            return jsonify({"error": str(exc)}), 409
 
     @app.route("/api/tenants/updateBill/<int:bill_id>", methods=["PUT"])
     @require_role("ADMIN")

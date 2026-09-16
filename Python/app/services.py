@@ -37,8 +37,19 @@ def verify_password(stored_hash: str, password: str) -> bool:
     return check_password_hash(stored_hash, password)
 
 
+class OTPCooldownError(Exception):
+    """Raised when an OTP is requested again before OTP_COOLDOWN_SECONDS has
+    elapsed for that email, to stop registration/forgot-password being used
+    to spam an inbox or burn through Resend's daily send quota."""
+
+    def __init__(self, retry_after_seconds: int):
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(f"Please wait {retry_after_seconds}s before requesting another OTP.")
+
+
 class OTPService:
     OTP_TTL_MILLIS = 5 * 60 * 1000
+    OTP_COOLDOWN_SECONDS = 60
     otp_storage: Dict[str, Dict[str, Any]] = {}
 
     def __init__(self, email_service: "EmailService"):
@@ -46,10 +57,19 @@ class OTPService:
         self.logger = logging.getLogger("app.services")
 
     def generate_otp(self, email: str) -> str:
+        existing = self.otp_storage.get(email)
+        if existing is not None:
+            elapsed = time.time() - existing.get("requested_at", 0)
+            if elapsed < self.OTP_COOLDOWN_SECONDS:
+                retry_after = int(self.OTP_COOLDOWN_SECONDS - elapsed) + 1
+                self.logger.warning("OTP request for %s throttled; retry after %ss.", email, retry_after)
+                raise OTPCooldownError(retry_after)
+
         otp = str(random.randint(1000, 9999))
         self.otp_storage[email] = {
             "otp": otp,
             "expires_at": time.time() * 1000 + self.OTP_TTL_MILLIS,
+            "requested_at": time.time(),
         }
         self.logger.info("Generated OTP for %s (valid for 5 minutes).", email)
         self.email_service.send_otp_email(email, otp)
@@ -164,6 +184,10 @@ class TenantBillService:
         return self.repo.find_all()
 
     def delete_bill(self, bill_id: int) -> str:
+        bill = self.repo.find_by_id(bill_id)
+        if bill is not None and bill.paid:
+            self.logger.warning("Delete-bill rejected: bill %s is already paid.", bill_id)
+            raise PermissionError("Cannot delete a bill that has already been paid.")
         self.repo.delete_by_id(bill_id)
         self.logger.info("Deleted bill %s.", bill_id)
         return "Bill deleted successfully."
