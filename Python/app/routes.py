@@ -15,7 +15,7 @@ from app.database import get_db
 from app.models import Complaint, Occupant, TenantBill, User
 from app.payments import PaymentService
 from app.repositories import ComplaintRepository, OccupantRepository, TenantBillRepository, TransactionLogRepository, UserRepository
-from app.services import ComplaintService, EmailService, OccupantService, OTPCooldownError, OTPService, TenantBillService, TransactionService, UserService, fetch_uploaded_file, to_iso_utc, verify_password
+from app.services import ComplaintService, EmailService, LoginLockedError, LoginThrottle, OccupantService, OTPCooldownError, OTPService, TenantBillService, TransactionService, UserService, fetch_uploaded_file, to_iso_utc, verify_password
 
 logger = logging.getLogger("app.auth")
 
@@ -45,19 +45,27 @@ def register_routes(app: Flask) -> None:
         if not username or not password:
             return jsonify({"error": "Invalid credentials"}), 401
 
+        try:
+            LoginThrottle.check(username)
+        except LoginLockedError as exc:
+            return jsonify({"error": str(exc), "retryAfterSeconds": exc.retry_after_seconds}), 429
+
         db = get_db()
         repo = UserRepository(db)
         user = repo.find_by_username(username)
         if not user:
             logger.warning("Login failed for '%s': user not found.", username)
+            LoginThrottle.record_failure(username)
             return jsonify({"error": "Invalid credentials"}), 401
         if not user.registration_completed:
             logger.warning("Login failed for '%s': registration incomplete.", username)
             return jsonify({"error": "Registration incomplete"}), 403
         if not verify_password(user.password, password):
             logger.warning("Login failed for '%s': incorrect password.", username)
+            LoginThrottle.record_failure(username)
             return jsonify({"error": "Invalid credentials"}), 401
 
+        LoginThrottle.record_success(username)
         logger.info("User '%s' logged in successfully (role=%s).", username, user.role)
         token = generate_token(user.username, user.role)
         return jsonify({"role": user.role, "username": username, "token": token}), 200
@@ -172,19 +180,27 @@ def register_routes(app: Flask) -> None:
         if not username or not password:
             return jsonify({"error": "username,password required"}), 400
 
+        try:
+            LoginThrottle.check(username)
+        except LoginLockedError as exc:
+            return jsonify({"error": str(exc), "retryAfterSeconds": exc.retry_after_seconds}), 429
+
         db = get_db()
         repo = UserRepository(db)
         user = repo.find_by_username(username)
         if user is None:
             logger.warning("Login failed for '%s': user not found.", username)
+            LoginThrottle.record_failure(username)
             return jsonify({"error": "Invalid credentials"}), 401
         if not user.registration_completed:
             logger.warning("Login failed for '%s': registration incomplete.", username)
             return jsonify({"error": "Registration incomplete"}), 403
         if not verify_password(user.password, password):
             logger.warning("Login failed for '%s': incorrect password.", username)
+            LoginThrottle.record_failure(username)
             return jsonify({"error": "Invalid credentials"}), 401
 
+        LoginThrottle.record_success(username)
         logger.info("User '%s' logged in successfully (role=%s).", username, user.role)
         token = generate_token(user.username, user.role)
         return jsonify({"username": user.username, "role": user.role, "token": token}), 200

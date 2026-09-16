@@ -74,6 +74,47 @@ def verify_password(stored_hash: str, password: str) -> bool:
     return check_password_hash(stored_hash, password)
 
 
+class LoginLockedError(Exception):
+    """Raised when a username has too many recent failed login attempts. Keyed
+    by username rather than IP -- Render's request.remote_addr is always
+    127.0.0.1 (the app sits behind Render's proxy without X-Forwarded-For
+    parsing), so IP-based throttling would silently do nothing."""
+
+    def __init__(self, retry_after_seconds: int):
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(f"Too many failed login attempts. Try again in {retry_after_seconds}s.")
+
+
+class LoginThrottle:
+    MAX_FAILED_ATTEMPTS = 5
+    LOCKOUT_SECONDS = 15 * 60
+    _attempts: Dict[str, Dict[str, Any]] = {}
+
+    @classmethod
+    def check(cls, username: str) -> None:
+        entry = cls._attempts.get(username)
+        if entry is None:
+            return
+        locked_until = entry.get("locked_until")
+        if locked_until is None:
+            return
+        remaining = locked_until - time.time()
+        if remaining > 0:
+            raise LoginLockedError(int(remaining) + 1)
+        cls._attempts.pop(username, None)
+
+    @classmethod
+    def record_failure(cls, username: str) -> None:
+        entry = cls._attempts.setdefault(username, {"failures": 0, "locked_until": None})
+        entry["failures"] += 1
+        if entry["failures"] >= cls.MAX_FAILED_ATTEMPTS:
+            entry["locked_until"] = time.time() + cls.LOCKOUT_SECONDS
+
+    @classmethod
+    def record_success(cls, username: str) -> None:
+        cls._attempts.pop(username, None)
+
+
 class OTPCooldownError(Exception):
     """Raised when an OTP is requested again before OTP_COOLDOWN_SECONDS has
     elapsed for that email, to stop registration/forgot-password being used
