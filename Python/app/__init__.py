@@ -50,14 +50,24 @@ if not any(isinstance(h, RotatingFileHandler) and getattr(h, "baseFilename", "")
 if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, RotatingFileHandler) for h in root_logger.handlers):
     root_logger.addHandler(stream_handler)
 
+_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "https://vgrpay.uk",
+    "https://d8aff7a8.rentapp1.pages.dev",
+    "https://rentappfrontend.onrender.com",
+]
 CORS(
     app,
-    resources={r"/api/*": {"origins": [
-        "http://localhost:3000",
-        "https://vgrpay.uk",
-        "https://d8aff7a8.rentapp1.pages.dev",
-        "https://rentappfrontend.onrender.com",
-    ]}},
+    # /uploads/* also needs CORS -- it's fetched cross-origin with an
+    # Authorization header (to check the requester owns the document),
+    # which browsers always preflight; without this the preflight itself
+    # returns 200 (Flask's default OPTIONS handling) but the browser then
+    # blocks the real GET for having no Access-Control-Allow-Origin,
+    # surfacing as a bare "Failed to fetch" with no server-side error at all.
+    resources={
+        r"/api/*": {"origins": _ALLOWED_ORIGINS},
+        r"/uploads/*": {"origins": _ALLOWED_ORIGINS},
+    },
 )
 
 
