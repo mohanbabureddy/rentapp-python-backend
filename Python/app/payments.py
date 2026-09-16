@@ -47,6 +47,12 @@ class PaymentService:
             "currency": "INR",
             "receipt": f"bill-{bill_id}",
             "notes": {"billId": str(bill_id), "tenantName": bill.tenant_name or ""},
+            # Without this, Razorpay defaults to manual capture -- a successful
+            # payment sits as "authorized" (money held, not settled) until
+            # something explicitly captures it, which nothing here ever did.
+            # verify_payment already refuses to mark a bill paid unless the
+            # payment is "captured", so uncaptured payments just got stuck.
+            "payment_capture": 1,
         })
         logger.info("Created Razorpay order %s for bill %s (tenant=%s, amount=%s paise).",
                     order["id"], bill_id, bill.tenant_name, amount)
