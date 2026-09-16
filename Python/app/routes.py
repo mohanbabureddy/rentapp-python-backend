@@ -298,6 +298,7 @@ def register_routes(app: Flask) -> None:
                 "rent": b.rent,
                 "water": b.water,
                 "electricity": b.electricity,
+                "miscellaneous": b.miscellaneous,
                 "paid": b.paid,
                 "paidDate": to_iso_utc(b.paid_date),
                 "createdDate": b.created_date.isoformat() if b.created_date else None,
@@ -364,6 +365,7 @@ def register_routes(app: Flask) -> None:
             rent=data.get("rent"),
             water=data.get("water"),
             electricity=data.get("electricity"),
+            miscellaneous=data.get("miscellaneous"),
             paid=False,
         )
         db = get_db()
@@ -389,6 +391,7 @@ def register_routes(app: Flask) -> None:
                 "rent": b.rent,
                 "water": b.water,
                 "electricity": b.electricity,
+                "miscellaneous": b.miscellaneous,
                 "paid": b.paid,
                 "paidDate": to_iso_utc(b.paid_date),
                 "createdDate": b.created_date.isoformat() if b.created_date else None,
@@ -417,6 +420,7 @@ def register_routes(app: Flask) -> None:
             rent=data.get("rent"),
             water=data.get("water"),
             electricity=data.get("electricity"),
+            miscellaneous=data.get("miscellaneous"),
         )
         try:
             return jsonify({"message": service.update_bill(bill_id, updated)}), 200
@@ -438,6 +442,7 @@ def register_routes(app: Flask) -> None:
                 "rent": b.rent,
                 "water": b.water,
                 "electricity": b.electricity,
+                "miscellaneous": b.miscellaneous,
                 "paid": b.paid,
             }
             for b in bills

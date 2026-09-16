@@ -27,7 +27,7 @@ class PaymentService:
 
     @staticmethod
     def _bill_amount_paise(bill: TenantBill) -> int:
-        total = (bill.rent or 0) + (bill.water or 0) + (bill.electricity or 0)
+        total = (bill.rent or 0) + (bill.water or 0) + (bill.electricity or 0) + (bill.miscellaneous or 0)
         return round(total * 100)
 
     def create_order(self, bill_id: int) -> Dict[str, Any]:

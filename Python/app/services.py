@@ -144,8 +144,8 @@ class TenantBillService:
             raise ValueError("Bill already exists for this tenant and month.")
         bill.created_date = date.today()
         self.repo.save(bill)
-        self.logger.info("Added new bill for tenant %s, month %s (rent=%s, water=%s, electricity=%s).",
-                          bill.tenant_name, bill.month_year, bill.rent, bill.water, bill.electricity)
+        self.logger.info("Added new bill for tenant %s, month %s (rent=%s, water=%s, electricity=%s, miscellaneous=%s).",
+                          bill.tenant_name, bill.month_year, bill.rent, bill.water, bill.electricity, bill.miscellaneous)
         if self.email_service is not None:
             tenant = self._tenant_user(bill.tenant_name)
             try:
@@ -178,6 +178,7 @@ class TenantBillService:
         bill.rent = updated.rent
         bill.water = updated.water
         bill.electricity = updated.electricity
+        bill.miscellaneous = updated.miscellaneous
         self.repo.save(bill)
         self.logger.info("Updated bill %s for tenant %s (%s).", bill_id, bill.tenant_name, bill.month_year)
         return "Bill updated successfully."
@@ -409,7 +410,8 @@ class EmailService:
         rent = bill.rent or 0
         water = bill.water or 0
         electricity = bill.electricity or 0
-        return rent + water + electricity
+        miscellaneous = bill.miscellaneous or 0
+        return rent + water + electricity + miscellaneous
 
     def _brand_logo(self) -> str:
         return """
@@ -430,6 +432,13 @@ class EmailService:
 
     def _bill_template(self, bill: TenantBill, tenant_name: str, title: str, message: str, footer: str) -> str:
         total = self._invoice_total(bill)
+        misc_row = ""
+        if bill.miscellaneous:
+            misc_row = f"""
+                <tr>
+                  <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb;"><strong>Miscellaneous</strong></td>
+                  <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb; text-align: right;">₹{bill.miscellaneous:.2f}</td>
+                </tr>"""
         return f"""
         <html>
           <body style="font-family: Arial, sans-serif; color: #1f2937; line-height: 1.6; background-color: #efe8dd; padding: 24px; margin: 0;">
@@ -461,7 +470,7 @@ class EmailService:
                 <tr>
                   <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb;"><strong>Electricity</strong></td>
                   <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb; text-align: right;">₹{bill.electricity or 0:.2f}</td>
-                </tr>
+                </tr>{misc_row}
                 <tr>
                   <td style="padding: 12px 14px; font-size: 18px;"><strong>Total Due</strong></td>
                   <td style="padding: 12px 14px; font-size: 18px; text-align: right;"><strong>₹{total:.2f}</strong></td>

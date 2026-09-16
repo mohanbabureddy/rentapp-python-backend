@@ -56,6 +56,7 @@ class TenantBill(Base):
     rent = Column(Float, nullable=True)
     water = Column(Float, nullable=True)
     electricity = Column(Float, nullable=True)
+    miscellaneous = Column(Float, nullable=True)
     paid = Column(BitBoolean, default=False, nullable=False)
     paid_date = Column(DateTime, nullable=True)
     created_date = Column(Date, nullable=True)
