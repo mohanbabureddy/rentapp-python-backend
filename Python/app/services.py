@@ -449,6 +449,9 @@ class EmailService:
         return values
 
     def _resend_settings(self) -> Dict[str, Any]:
+        # Re-read fresh on every call (not cached) -- Render only re-injects
+        # updated dashboard env vars on a real deploy, not a plain restart, so
+        # this must never memoize a stale value across a restart-only cycle.
         env_values = self._load_dotenv()
         return {
             "api_key": os.getenv("RESEND_API_KEY", env_values.get("RESEND_API_KEY")),
