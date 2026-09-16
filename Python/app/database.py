@@ -13,14 +13,24 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL") or "sqlite:///tenant_billing.db"
 
+# Providers (Supabase, Neon, Heroku-style) hand out plain "postgresql://" or
+# "postgres://" URLs, which SQLAlchemy defaults to the old psycopg2 driver --
+# not installed here since it has no prebuilt wheel for this Python version.
+# Route explicitly to psycopg (v3) instead, which does.
+if DB_URL.startswith("postgres://"):
+    DB_URL = "postgresql+psycopg://" + DB_URL[len("postgres://"):]
+elif DB_URL.startswith("postgresql://"):
+    DB_URL = "postgresql+psycopg://" + DB_URL[len("postgresql://"):]
+
 # PyMySQL has no "ssl_mode" URL param (that's a MySQL Connector/Python-ism) --
 # TLS has to be requested via connect_args instead. DB_SSL_CA holds the PEM
 # certificate content (e.g. Aiven's CA cert) directly, since Render env vars
-# can't reference a file path on disk.
+# can't reference a file path on disk. Postgres (e.g. Supabase) needs no
+# equivalent -- its connection string/driver negotiate TLS on their own.
 _ssl_ca_pem = os.getenv("DB_SSL_CA")
 if DB_URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
-elif _ssl_ca_pem:
+elif DB_URL.startswith("mysql") and _ssl_ca_pem:
     ca_file = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
     ca_file.write(_ssl_ca_pem)
     ca_file.close()
