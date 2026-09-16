@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from flask import Flask, g, jsonify, request, send_from_directory
+from flask import Flask, Response, g, jsonify, request
 from werkzeug.security import generate_password_hash
 
 from app.assistant import AssistantService
@@ -14,7 +15,7 @@ from app.database import get_db
 from app.models import Complaint, Occupant, TenantBill, User
 from app.payments import PaymentService
 from app.repositories import ComplaintRepository, OccupantRepository, TenantBillRepository, TransactionLogRepository, UserRepository
-from app.services import UPLOADS_ROOT, ComplaintService, EmailService, OccupantService, OTPCooldownError, OTPService, TenantBillService, TransactionService, UserService, to_iso_utc, verify_password
+from app.services import ComplaintService, EmailService, OccupantService, OTPCooldownError, OTPService, TenantBillService, TransactionService, UserService, fetch_uploaded_file, to_iso_utc, verify_password
 
 logger = logging.getLogger("app.auth")
 
@@ -574,7 +575,13 @@ def register_routes(app: Flask) -> None:
         if g.current_user["role"] != "ADMIN" and owner != g.current_user["username"]:
             logger.warning("Forbidden: user '%s' attempted to fetch upload '%s'.", g.current_user["username"], filepath)
             return jsonify({"error": "Forbidden"}), 403
-        return send_from_directory(UPLOADS_ROOT, filepath)
+        # Proxies from Supabase Storage when configured (Render's own disk is
+        # wiped on every deploy), falling back to the local uploads/ dir.
+        result = fetch_uploaded_file(filepath)
+        if result is None:
+            return jsonify({"error": "File not found"}), 404
+        content, content_type = result
+        return Response(content, mimetype=content_type or mimetypes.guess_type(filepath)[0] or "application/octet-stream")
 
     @app.route("/api/tenants/occupants/<tenant>", methods=["POST"])
     @require_self_or_admin(lambda tenant: tenant)

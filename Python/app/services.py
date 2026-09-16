@@ -16,6 +16,43 @@ from app.repositories import ComplaintRepository, OccupantRepository, TenantBill
 
 UPLOADS_ROOT = Path(__file__).resolve().parents[1] / "uploads"
 
+# Render's disk is ephemeral -- anything written to UPLOADS_ROOT is wiped on
+# every restart/redeploy. When these are set, occupant documents go to a
+# private Supabase Storage bucket instead, which survives deploys. Falls
+# back to the local disk (original behavior) when unset, so local dev
+# doesn't require Supabase credentials.
+_SUPABASE_URL = os.getenv("SUPABASE_URL")
+_SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+_SUPABASE_BUCKET = "aadhaar"
+
+
+def _storage_configured() -> bool:
+    return bool(_SUPABASE_URL and _SUPABASE_SERVICE_KEY)
+
+
+def _storage_headers() -> Dict[str, str]:
+    return {"Authorization": f"Bearer {_SUPABASE_SERVICE_KEY}", "apikey": _SUPABASE_SERVICE_KEY}
+
+
+def _storage_object_url(object_path: str) -> str:
+    return f"{_SUPABASE_URL}/storage/v1/object/{_SUPABASE_BUCKET}/{object_path}"
+
+
+def fetch_uploaded_file(relative_path: str):
+    """Returns (content_bytes, content_type) for a path like 'aadhaar/<tenant>/<file>',
+    from Supabase Storage if configured, else the local uploads/ disk. None if missing."""
+    if _storage_configured():
+        object_path = relative_path.split("/", 1)[-1]
+        resp = requests.get(_storage_object_url(object_path), headers=_storage_headers(), timeout=15)
+        if not resp.ok:
+            return None
+        return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+
+    file_path = UPLOADS_ROOT / relative_path
+    if not file_path.is_file():
+        return None
+    return file_path.read_bytes(), None
+
 
 def to_iso_utc(dt: Optional[datetime]) -> Optional[str]:
     """Serialize a datetime for the API with an explicit UTC marker. Every timestamp in
@@ -303,17 +340,35 @@ class OccupantService:
             "application/pdf": ".pdf",
         }
         file_name = sanitized + ext_map.get(content_type, "")
-        target_dir = UPLOADS_ROOT / "aadhaar" / tenant_username
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target_path = target_dir / file_name
-        file.save(target_path)
+        object_path = f"{tenant_username}/{file_name}"
+
+        if _storage_configured():
+            file_bytes = file.read()
+            resp = requests.post(
+                _storage_object_url(object_path),
+                headers={**_storage_headers(), "Content-Type": content_type, "x-upsert": "true"},
+                data=file_bytes,
+                timeout=15,
+            )
+            if not resp.ok:
+                self.logger.error("Supabase Storage upload failed for %s: %s %s", object_path, resp.status_code, resp.text)
+                raise RuntimeError("Failed to store uploaded file")
+        else:
+            target_dir = UPLOADS_ROOT / "aadhaar" / tenant_username
+            target_dir.mkdir(parents=True, exist_ok=True)
+            file.save(target_dir / file_name)
 
         occupant = Occupant(
             tenant_username=tenant_username,
             name=name.strip(),
             aadhar_file_name=file.filename,
             aadhar_content_type=content_type,
-            aadhar_storage_path=str(Path("aadhaar") / tenant_username / file_name),
+            # Forward slashes always -- this is a URL/object-key path, not a
+            # filesystem path, so it must not pick up Path's OS-dependent
+            # separator (str(Path(...)) uses backslashes on Windows, which
+            # silently broke both the Supabase object key and, on this
+            # platform, any string-based prefix stripping of this field).
+            aadhar_storage_path=f"aadhaar/{tenant_username}/{file_name}",
         )
         self.repo.save(occupant)
         self.logger.info("Added occupant '%s' for tenant %s (file=%s).", occupant.name, tenant_username, occupant.aadhar_file_name)
@@ -328,9 +383,15 @@ class OccupantService:
             self.logger.warning("Delete-occupant rejected: occupant %s ('%s') is verified.", occupant_id, occupant.name)
             raise ValueError("Cannot delete a verified occupant")
         if occupant.aadhar_storage_path:
-            p = Path("uploads") / occupant.aadhar_storage_path
-            if p.exists():
-                p.unlink(missing_ok=True)
+            if _storage_configured():
+                object_path = occupant.aadhar_storage_path.split("/", 1)[-1]
+                resp = requests.delete(_storage_object_url(object_path), headers=_storage_headers(), timeout=15)
+                if not resp.ok:
+                    self.logger.warning("Supabase Storage delete failed for %s: %s %s", object_path, resp.status_code, resp.text)
+            else:
+                p = Path("uploads") / occupant.aadhar_storage_path
+                if p.exists():
+                    p.unlink(missing_ok=True)
         self.repo.delete(occupant)
         self.logger.info("Deleted occupant %s ('%s') for tenant %s.", occupant_id, occupant.name, occupant.tenant_username)
 
