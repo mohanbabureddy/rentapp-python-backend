@@ -441,6 +441,8 @@ def register_routes(app: Flask) -> None:
             return jsonify({"message": service.update_bill(bill_id, updated)}), 200
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 404
+        except PermissionError as exc:
+            return jsonify({"error": str(exc)}), 409
 
     @app.route("/api/tenants/paid-bills/<month_year>", methods=["GET"])
     @require_role("ADMIN")

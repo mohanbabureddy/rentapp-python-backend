@@ -173,6 +173,9 @@ class TenantBillService:
         if bill is None:
             self.logger.warning("Update-bill failed: bill %s not found.", bill_id)
             raise ValueError("Bill not found")
+        if bill.paid:
+            self.logger.warning("Update-bill rejected: bill %s is already paid.", bill_id)
+            raise PermissionError("Cannot edit a bill that has already been paid.")
         bill.tenant_name = updated.tenant_name
         bill.month_year = updated.month_year
         bill.rent = updated.rent
