@@ -2,57 +2,19 @@ import logging
 import os
 import random
 import re
-import smtplib
-import socket
 import time
 from datetime import date, datetime
-from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import bcrypt
+import requests
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.models import Complaint, Occupant, TenantBill, TransactionLog, User
 from app.repositories import ComplaintRepository, OccupantRepository, TenantBillRepository, TransactionLogRepository, UserRepository
 
 UPLOADS_ROOT = Path(__file__).resolve().parents[1] / "uploads"
-
-
-def _create_ipv4_connection(address, timeout, source_address=None):
-    """Like socket.create_connection, but restricted to IPv4. Render's containers
-    have no IPv6 route, yet smtp.gmail.com also publishes an AAAA record -- the
-    stdlib tries every resolved address including IPv6, which fails immediately
-    with OSError [Errno 101] Network unreachable instead of falling back to the
-    IPv4 address that actually works."""
-    host, port = address
-    err = None
-    for family, socktype, proto, _, sockaddr in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM):
-        sock = None
-        try:
-            sock = socket.socket(family, socktype, proto)
-            if timeout is not None:
-                sock.settimeout(timeout)
-            if source_address:
-                sock.bind(source_address)
-            sock.connect(sockaddr)
-            return sock
-        except OSError as exc:
-            err = exc
-            if sock is not None:
-                sock.close()
-    raise err if err is not None else OSError("getaddrinfo returned no IPv4 addresses")
-
-
-class _IPv4SMTP(smtplib.SMTP):
-    def _get_socket(self, host, port, timeout):
-        return _create_ipv4_connection((host, port), timeout, self.source_address)
-
-
-class _IPv4SMTP_SSL(smtplib.SMTP_SSL):
-    def _get_socket(self, host, port, timeout):
-        sock = _create_ipv4_connection((host, port), timeout, self.source_address)
-        return self.context.wrap_socket(sock, server_hostname=self._host)
 
 
 def to_iso_utc(dt: Optional[datetime]) -> Optional[str]:
@@ -403,58 +365,42 @@ class EmailService:
             values[key.strip()] = value.strip().strip('"\'')
         return values
 
-    def _smtp_settings(self) -> Dict[str, Any]:
+    def _resend_settings(self) -> Dict[str, Any]:
         env_values = self._load_dotenv()
         return {
-            "server": os.getenv("MAIL_SERVER", env_values.get("MAIL_SERVER", "localhost")),
-            "port": int(os.getenv("MAIL_PORT", env_values.get("MAIL_PORT", "25"))),
-            "username": os.getenv("MAIL_USERNAME", env_values.get("MAIL_USERNAME")),
-            "password": os.getenv("MAIL_PASSWORD", env_values.get("MAIL_PASSWORD")),
-            "use_tls": os.getenv("MAIL_USE_TLS", env_values.get("MAIL_USE_TLS", "false")).lower() in {"1", "true", "yes", "on"},
-            "use_ssl": os.getenv("MAIL_USE_SSL", env_values.get("MAIL_USE_SSL", "false")).lower() in {"1", "true", "yes", "on"},
-            "sender": os.getenv("MAIL_SENDER", env_values.get("MAIL_SENDER")) or os.getenv("MAIL_FROM") or "noreply@localhost",
+            "api_key": os.getenv("RESEND_API_KEY", env_values.get("RESEND_API_KEY")),
+            "sender": os.getenv("MAIL_SENDER", env_values.get("MAIL_SENDER")) or os.getenv("MAIL_FROM") or "onboarding@resend.dev",
         }
 
     def _send_email(self, recipient: str, subject: str, body: str, html_body: Optional[str] = None) -> None:
         if not recipient:
             self.logger.warning("Skipping email send: no recipient address provided. subject=%s", subject)
             return
-        settings = self._smtp_settings()
-        message = EmailMessage()
-        message["Subject"] = subject
-        message["From"] = settings["sender"]
-        message["To"] = recipient
-        message.set_content(body)
-        if html_body:
-            message.add_alternative(html_body, subtype="html")
+        settings = self._resend_settings()
+        if not settings["api_key"]:
+            self.logger.error("Cannot send email to %s: RESEND_API_KEY is not configured. subject=%s", recipient, subject)
+            raise RuntimeError("RESEND_API_KEY is not configured")
 
-        self.logger.info(
-            "Sending email to %s. subject=%s server=%s port=%s username=%s use_tls=%s use_ssl=%s sender=%s",
-            recipient, subject, settings["server"], settings["port"], settings["username"],
-            settings["use_tls"], settings["use_ssl"], settings["sender"],
-        )
+        payload = {
+            "from": settings["sender"],
+            "to": [recipient],
+            "subject": subject,
+            "text": body,
+        }
+        if html_body:
+            payload["html"] = html_body
+
+        self.logger.info("Sending email to %s via Resend. subject=%s sender=%s", recipient, subject, settings["sender"])
         try:
-            if settings["use_ssl"]:
-                with _IPv4SMTP_SSL(settings["server"], settings["port"], timeout=10) as smtp:
-                    if settings["username"]:
-                        smtp.login(settings["username"], settings["password"])
-                    smtp.send_message(message)
-            else:
-                with _IPv4SMTP(settings["server"], settings["port"], timeout=10) as smtp:
-                    if settings["use_tls"]:
-                        smtp.starttls()
-                    if settings["username"]:
-                        smtp.login(settings["username"], settings["password"])
-                    smtp.send_message(message)
-        except Exception as exc:  # pragma: no cover - network-dependent path
-            self.logger.exception("Mail not sent to %s. SMTP config: server=%s port=%s username=%s use_tls=%s use_ssl=%s sender=%s",
-                                  recipient,
-                                  settings["server"],
-                                  settings["port"],
-                                  settings["username"],
-                                  settings["use_tls"],
-                                  settings["use_ssl"],
-                                  settings["sender"])
+            response = requests.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {settings['api_key']}"},
+                json=payload,
+                timeout=10,
+            )
+            response.raise_for_status()
+        except Exception:  # pragma: no cover - network-dependent path
+            self.logger.exception("Mail not sent to %s via Resend. subject=%s sender=%s", recipient, subject, settings["sender"])
             raise
         else:
             self.logger.info("Email sent successfully to %s. subject=%s", recipient, subject)
