@@ -217,9 +217,6 @@ class TenantBillService:
                 self.logger.exception("Failed to send bill-generated notification for tenant %s; bill was still saved.", bill.tenant_name)
         return "Bill added successfully and notification triggered."
 
-    def get_all_bills(self) -> List[TenantBill]:
-        return self.repo.find_all()
-
     def delete_bill(self, bill_id: int) -> str:
         bill = self.repo.find_by_id(bill_id)
         if bill is not None and bill.paid:
@@ -409,9 +406,6 @@ class OccupantService:
         else:
             self.logger.info("Occupant %s ('%s') is already verified; no action taken.", occupant_id, occupant.name)
         return {"status": "ok", "id": occupant.id, "verified": True}
-
-    def find_by_id(self, occupant_id: int) -> Optional[Occupant]:
-        return self.repo.find_by_id(occupant_id)
 
 
 class TransactionService:
