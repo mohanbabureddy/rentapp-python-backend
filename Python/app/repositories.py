@@ -45,8 +45,12 @@ class TenantBillRepository:
     def find_by_tenant_name_order_by_month_desc(self, tenant_name: str) -> List[TenantBill]:
         return self.db.query(TenantBill).filter(TenantBill.tenant_name == tenant_name).order_by(TenantBill.month_year.desc()).all()
 
-    def find_by_tenant_name_and_month(self, tenant_name: str, month_year: str) -> Optional[TenantBill]:
-        return self.db.query(TenantBill).filter(TenantBill.tenant_name == tenant_name, TenantBill.month_year == month_year).first()
+    def find_by_tenant_name_and_month(self, tenant_name: str, month_year: str, bill_type: str = "RENT") -> Optional[TenantBill]:
+        return self.db.query(TenantBill).filter(
+            TenantBill.tenant_name == tenant_name,
+            TenantBill.month_year == month_year,
+            TenantBill.bill_type == bill_type,
+        ).first()
 
     def find_by_paid_true_and_month(self, month_year: str) -> List[TenantBill]:
         return self.db.query(TenantBill).filter(TenantBill.paid == True, TenantBill.month_year == month_year).all()  # noqa: E712 (paid is BitBoolean/Integer-backed; == compiles to "= 1", .is_() emits "IS 1" which MySQL rejects)

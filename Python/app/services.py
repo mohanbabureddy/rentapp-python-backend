@@ -215,6 +215,7 @@ class DepositService:
         history = self.deposit_repo.find_by_tenant_order_by_date_desc(username)
         return {
             "moveInDate": user.move_in_date.isoformat() if user.move_in_date else None,
+            "demandedDeposit": user.demanded_deposit,
             "totalAmountDeposited": self.deposit_repo.total_for_tenant(username),
             "history": [self._entry_dto(p) for p in history],
         }
@@ -229,6 +230,16 @@ class DepositService:
             raise ValueError("moveInDate must be in YYYY-MM-DD format")
         self.user_repo.save(user)
         self.logger.info("Set move-in date for '%s' to %s.", user.username, user.move_in_date)
+
+    def set_demanded_deposit(self, user_id: int, amount: float) -> None:
+        user = self.user_repo.find_by_id(user_id)
+        if user is None:
+            raise ValueError("User not found")
+        if amount < 0:
+            raise ValueError("Demanded deposit cannot be negative")
+        user.demanded_deposit = amount
+        self.user_repo.save(user)
+        self.logger.info("Set demanded deposit for '%s' to %s.", user.username, amount)
 
     def add_manual_deposit(self, user_id: int, amount: float, notes: Optional[str] = None) -> Dict[str, Any]:
         user = self.user_repo.find_by_id(user_id)
@@ -296,10 +307,10 @@ class TenantBillService:
         return "Payment marked as paid and invoice sent."
 
     def add_bill(self, bill: TenantBill) -> str:
-        existing = self.repo.find_by_tenant_name_and_month(bill.tenant_name, bill.month_year)
+        existing = self.repo.find_by_tenant_name_and_month(bill.tenant_name, bill.month_year, bill.bill_type)
         if existing is not None:
-            self.logger.warning("Add-bill rejected: bill already exists for tenant %s, month %s.", bill.tenant_name, bill.month_year)
-            raise ValueError("Bill already exists for this tenant and month.")
+            self.logger.warning("Add-bill rejected: %s bill already exists for tenant %s, month %s.", bill.bill_type, bill.tenant_name, bill.month_year)
+            raise ValueError(f"{bill.bill_type.title()} bill already exists for this tenant and month.")
         bill.created_date = date.today()
         self.repo.save(bill)
         self.logger.info("Added new bill for tenant %s, month %s (rent=%s, water=%s, electricity=%s, miscellaneous=%s).",
@@ -625,6 +636,23 @@ class EmailService:
                   <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb;"><strong>Miscellaneous</strong></td>
                   <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb; text-align: right;">₹{bill.miscellaneous:.2f}</td>
                 </tr>"""
+        # An electricity-only bill has no rent/water, so those rows would
+        # just show a confusing "₹0.00" -- only show what this bill type
+        # actually charges for.
+        rent_water_rows = "" if bill.bill_type == "ELECTRICITY" else f"""
+                <tr>
+                  <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb;"><strong>Rent</strong></td>
+                  <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb; text-align: right;">₹{bill.rent or 0:.2f}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb;"><strong>Water</strong></td>
+                  <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb; text-align: right;">₹{bill.water or 0:.2f}</td>
+                </tr>"""
+        electricity_row = f"""
+                <tr>
+                  <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb;"><strong>Electricity</strong></td>
+                  <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb; text-align: right;">₹{bill.electricity or 0:.2f}</td>
+                </tr>""" if bill.bill_type == "ELECTRICITY" or bill.electricity else ""
         return f"""
         <html>
           <body style="font-family: Arial, sans-serif; color: #1f2937; line-height: 1.6; background-color: #efe8dd; padding: 24px; margin: 0;">
@@ -645,18 +673,7 @@ class EmailService:
                   <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb;"><strong>Billing Month</strong></td>
                   <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb; text-align: right;">{bill.month_year}</td>
                 </tr>
-                <tr>
-                  <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb;"><strong>Rent</strong></td>
-                  <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb; text-align: right;">₹{bill.rent or 0:.2f}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb;"><strong>Water</strong></td>
-                  <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb; text-align: right;">₹{bill.water or 0:.2f}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb;"><strong>Electricity</strong></td>
-                  <td style="padding: 10px 14px; border-bottom: 1px solid #e5e7eb; text-align: right;">₹{bill.electricity or 0:.2f}</td>
-                </tr>{misc_row}
+                {rent_water_rows}{electricity_row}{misc_row}
                 <tr>
                   <td style="padding: 12px 14px; font-size: 18px;"><strong>Total Due</strong></td>
                   <td style="padding: 12px 14px; font-size: 18px; text-align: right;"><strong>₹{total:.2f}</strong></td>
@@ -676,16 +693,17 @@ class EmailService:
 
     def notify_bill_generated(self, bill: TenantBill, tenant_email: Optional[str], month: str) -> None:
         if tenant_email:
-            subject = f"Rent bill generated for {month}"
+            label = "Electricity" if bill.bill_type == "ELECTRICITY" else "Rent"
+            subject = f"{label} bill generated for {month}"
             body = (
-                f"Hello,\n\nYour rent bill for {month} has been generated.\n"
+                f"Hello,\n\nYour {label.lower()} bill for {month} has been generated.\n"
                 f"Amount due: ₹{self._invoice_total(bill):.2f}\n\nThank you."
             )
             html_body = self._bill_template(
                 bill=bill,
                 tenant_name=bill.tenant_name or "Tenant",
-                title="Invoice Generated",
-                message=f"Your rent invoice for {month} has been generated and is ready for payment.",
+                title=f"{label} Invoice Generated",
+                message=f"Your {label.lower()} invoice for {month} has been generated and is ready for payment.",
                 footer="Please pay the total amount before the due date. Thank you.",
             )
             self._send_email(tenant_email, subject, body, html_body)

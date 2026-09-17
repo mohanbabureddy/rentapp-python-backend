@@ -46,6 +46,7 @@ class User(Base):
     role = Column(String(50), nullable=True)
     registration_completed = Column(BitBoolean, default=False, nullable=False)
     move_in_date = Column(Date, nullable=True)
+    demanded_deposit = Column(Float, nullable=True)
 
 
 class TenantBill(Base):
@@ -54,6 +55,14 @@ class TenantBill(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     tenant_name = Column(String(255), nullable=True)
     month_year = Column(String(20), nullable=True)
+    # "RENT" (rent+water+miscellaneous) or "ELECTRICITY" (electricity only).
+    # Split out because electricity bills consistently arrive a week or more
+    # after rent is due (~10th vs ~17th-18th) -- forcing them into one bill
+    # meant rent couldn't be raised until the electricity figure was known.
+    # The amount fields and their payment logic are unchanged either way;
+    # whichever fields are zero/null for a given bill_type just contribute
+    # nothing to the total.
+    bill_type = Column(String(20), default="RENT", nullable=False)
     rent = Column(Float, nullable=True)
     water = Column(Float, nullable=True)
     electricity = Column(Float, nullable=True)

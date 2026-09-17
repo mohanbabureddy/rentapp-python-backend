@@ -271,6 +271,7 @@ def register_routes(app: Flask) -> None:
                 "role": u.role,
                 "registrationCompleted": u.registration_completed,
                 "moveInDate": u.move_in_date.isoformat() if u.move_in_date else None,
+                "demandedDeposit": u.demanded_deposit,
                 "totalAmountDeposited": deposit_totals.get(u.username, 0.0),
             }
             for u in users
@@ -323,6 +324,8 @@ def register_routes(app: Flask) -> None:
         try:
             if data.get("moveInDate"):
                 deposit_service.set_move_in_date(user_id, data["moveInDate"])
+            if data.get("demandedDeposit") is not None and data.get("demandedDeposit") != "":
+                deposit_service.set_demanded_deposit(user_id, float(data["demandedDeposit"]))
             if data.get("manualDepositAmount"):
                 deposit_service.add_manual_deposit(user_id, float(data["manualDepositAmount"]), data.get("notes"))
             user = UserRepository(db).find_by_id(user_id)
@@ -400,6 +403,7 @@ def register_routes(app: Flask) -> None:
                 "id": b.id,
                 "tenantName": b.tenant_name,
                 "monthYear": b.month_year,
+                "billType": b.bill_type,
                 "rent": b.rent,
                 "water": b.water,
                 "electricity": b.electricity,
@@ -467,6 +471,7 @@ def register_routes(app: Flask) -> None:
         bill = TenantBill(
             tenant_name=data.get("tenantName"),
             month_year=data.get("monthYear"),
+            bill_type=(data.get("billType") or "RENT").upper(),
             rent=data.get("rent"),
             water=data.get("water"),
             electricity=data.get("electricity"),
@@ -493,6 +498,7 @@ def register_routes(app: Flask) -> None:
                 "id": b.id,
                 "tenantName": b.tenant_name,
                 "monthYear": b.month_year,
+                "billType": b.bill_type,
                 "rent": b.rent,
                 "water": b.water,
                 "electricity": b.electricity,
@@ -549,6 +555,7 @@ def register_routes(app: Flask) -> None:
                 "id": b.id,
                 "tenantName": b.tenant_name,
                 "monthYear": b.month_year,
+                "billType": b.bill_type,
                 "rent": b.rent,
                 "water": b.water,
                 "electricity": b.electricity,

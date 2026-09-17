@@ -41,6 +41,28 @@ class DepositServiceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.service.set_move_in_date(3, "15/01/2026")
 
+    def test_set_demanded_deposit_saves_value(self):
+        self.user_repo.find_by_id.return_value = self.user
+        self.service.set_demanded_deposit(3, 20000)
+        self.assertEqual(self.user.demanded_deposit, 20000)
+        self.user_repo.save.assert_called_once()
+
+    def test_set_demanded_deposit_rejects_negative(self):
+        self.user_repo.find_by_id.return_value = self.user
+        with self.assertRaises(ValueError):
+            self.service.set_demanded_deposit(3, -100)
+
+    def test_get_summary_includes_demanded_deposit(self):
+        self.user.demanded_deposit = 20000
+        self.user_repo.find_by_username.return_value = self.user
+        self.deposit_repo.find_by_tenant_order_by_date_desc.return_value = []
+        self.deposit_repo.total_for_tenant.return_value = 5000.0
+
+        summary = self.service.get_summary("Room1")
+
+        self.assertEqual(summary["demandedDeposit"], 20000)
+        self.assertEqual(summary["totalAmountDeposited"], 5000.0)
+
     def test_add_manual_deposit_rejects_non_positive_amount(self):
         self.user_repo.find_by_id.return_value = self.user
         with self.assertRaises(ValueError):
