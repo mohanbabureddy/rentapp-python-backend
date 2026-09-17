@@ -11,8 +11,8 @@ import bcrypt
 import requests
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from app.models import Complaint, Occupant, TenantBill, TransactionLog, User
-from app.repositories import ComplaintRepository, OccupantRepository, TenantBillRepository, TransactionLogRepository, UserRepository
+from app.models import Complaint, DepositPayment, Occupant, TenantBill, TransactionLog, User
+from app.repositories import ComplaintRepository, DepositRepository, OccupantRepository, TenantBillRepository, TransactionLogRepository, UserRepository
 
 UPLOADS_ROOT = Path(__file__).resolve().parents[1] / "uploads"
 
@@ -186,6 +186,66 @@ class UserService:
         saved = self.user_repo.save(user)
         self.logger.info("Registered new tenant account: id=%s mail=%s", saved.id, saved.mail)
         return saved
+
+
+class DepositService:
+    """Security-deposit ledger. Total deposited is always computed as the sum
+    of DepositRepository rows for a tenant -- never a single stored number --
+    so an admin's manual entry and a tenant's own Razorpay payment can never
+    silently overwrite each other."""
+
+    def __init__(self, deposit_repo: DepositRepository, user_repo: UserRepository):
+        self.deposit_repo = deposit_repo
+        self.user_repo = user_repo
+        self.logger = logging.getLogger("app.services")
+
+    def _entry_dto(self, p: DepositPayment) -> Dict[str, Any]:
+        return {
+            "id": p.id,
+            "amount": p.amount,
+            "source": p.source,
+            "notes": p.notes,
+            "paidDate": to_iso_utc(p.paid_date),
+        }
+
+    def get_summary(self, username: str) -> Dict[str, Any]:
+        user = self.user_repo.find_by_username(username)
+        if user is None:
+            raise ValueError("User not found")
+        history = self.deposit_repo.find_by_tenant_order_by_date_desc(username)
+        return {
+            "moveInDate": user.move_in_date.isoformat() if user.move_in_date else None,
+            "totalAmountDeposited": self.deposit_repo.total_for_tenant(username),
+            "history": [self._entry_dto(p) for p in history],
+        }
+
+    def set_move_in_date(self, user_id: int, move_in_date: str) -> None:
+        user = self.user_repo.find_by_id(user_id)
+        if user is None:
+            raise ValueError("User not found")
+        try:
+            user.move_in_date = datetime.strptime(move_in_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise ValueError("moveInDate must be in YYYY-MM-DD format")
+        self.user_repo.save(user)
+        self.logger.info("Set move-in date for '%s' to %s.", user.username, user.move_in_date)
+
+    def add_manual_deposit(self, user_id: int, amount: float, notes: Optional[str] = None) -> Dict[str, Any]:
+        user = self.user_repo.find_by_id(user_id)
+        if user is None:
+            raise ValueError("User not found")
+        if amount <= 0:
+            raise ValueError("Amount must be greater than zero")
+        payment = DepositPayment(tenant_username=user.username, amount=amount, source="manual", notes=notes)
+        self.deposit_repo.save(payment)
+        self.logger.info("Admin recorded manual deposit of %s for '%s'.", amount, user.username)
+        return self.get_summary(user.username)
+
+    def record_payment(self, username: str, amount: float, payment_id: str) -> Dict[str, Any]:
+        payment = DepositPayment(tenant_username=username, amount=amount, source="razorpay", payment_id=payment_id)
+        self.deposit_repo.save(payment)
+        self.logger.info("Recorded deposit payment of %s for '%s' (payment_id=%s).", amount, username, payment_id)
+        return self.get_summary(username)
 
 
 class TenantBillService:

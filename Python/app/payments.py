@@ -107,3 +107,63 @@ class PaymentService:
             raise ValueError("Payment was not captured")
 
         logger.info("Verified Razorpay payment %s (order=%s) for bill %s.", payment_id, order_id, bill_id)
+
+    def create_deposit_order(self, username: str, amount_rupees: float) -> Dict[str, Any]:
+        """Same pattern as create_order, but for an open-ended security-deposit
+        top-up instead of a fixed bill -- there's no TenantBill row to check the
+        amount against, so the amount the tenant typed becomes the order amount
+        directly (still tamper-proof: verify_deposit_payment re-checks it against
+        what Razorpay's own order record says, not what the client claims after
+        the fact)."""
+        if self._client is None:
+            raise RuntimeError("Payments aren't configured (missing RAZORPAY_KEY_ID/SECRET in .env).")
+        if amount_rupees is None or amount_rupees <= 0:
+            raise ValueError("Amount must be greater than zero")
+        amount = round(amount_rupees * 100)
+
+        order = self._client.order.create({
+            "amount": amount,
+            "currency": "INR",
+            "receipt": f"deposit-{username}-{amount}",
+            "notes": {"purpose": "deposit", "username": username},
+            "payment_capture": 1,
+        })
+        logger.info("Created Razorpay deposit order %s for '%s' (amount=%s paise).", order["id"], username, amount)
+        return {"orderId": order["id"], "amount": amount, "currency": "INR", "keyId": self._key_id}
+
+    def verify_deposit_payment(self, username: str, order_id: str, payment_id: str, signature: str) -> float:
+        """Returns the verified amount in rupees on success."""
+        if self._client is None:
+            raise RuntimeError("Payments aren't configured (missing RAZORPAY_KEY_ID/SECRET in .env).")
+        if not order_id or not payment_id or not signature:
+            raise ValueError("orderId, paymentId, and signature are all required")
+
+        try:
+            self._client.utility.verify_payment_signature({
+                "razorpay_order_id": order_id,
+                "razorpay_payment_id": payment_id,
+                "razorpay_signature": signature,
+            })
+        except razorpay.errors.SignatureVerificationError:
+            logger.warning("Razorpay signature verification FAILED for deposit (user=%s, order=%s, payment=%s).", username, order_id, payment_id)
+            raise ValueError("Payment signature verification failed")
+
+        try:
+            order = self._client.order.fetch(order_id)
+            payment = self._client.payment.fetch(payment_id)
+        except (razorpay.errors.BadRequestError, razorpay.errors.ServerError, razorpay.errors.GatewayError) as exc:
+            logger.warning("Razorpay lookup failed for deposit (user=%s, order=%s, payment=%s): %s", username, order_id, payment_id, exc)
+            raise ValueError("Could not verify this payment with Razorpay")
+
+        notes = order.get("notes") or {}
+        if notes.get("purpose") != "deposit" or notes.get("username") != username:
+            logger.warning("Razorpay order %s was not a deposit order for '%s' (notes=%s).", order_id, username, notes)
+            raise ValueError("Payment does not match this deposit request")
+
+        if payment.get("status") != "captured":
+            logger.warning("Razorpay deposit payment %s for '%s' is not captured (status=%s).", payment_id, username, payment.get("status"))
+            raise ValueError("Payment was not captured")
+
+        amount_rupees = int(order.get("amount", 0)) / 100
+        logger.info("Verified Razorpay deposit payment %s (order=%s) for '%s': %s.", payment_id, order_id, username, amount_rupees)
+        return amount_rupees

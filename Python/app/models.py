@@ -45,6 +45,7 @@ class User(Base):
     mail = Column(String(255), nullable=True)
     role = Column(String(50), nullable=True)
     registration_completed = Column(BitBoolean, default=False, nullable=False)
+    move_in_date = Column(Date, nullable=True)
 
 
 class TenantBill(Base):
@@ -87,6 +88,25 @@ class Occupant(Base):
     verified = Column(BitBoolean, default=False, nullable=False)
     verified_by = Column(String(255), nullable=True)
     verified_at = Column(DateTime, nullable=True)
+
+
+class DepositPayment(Base):
+    """One entry in a tenant's security-deposit ledger. The tenant's total
+    deposit is always the SUM of these rows for their username, never a
+    single mutable field -- so it can't drift out of sync between what an
+    admin sets and what the tenant has actually paid. 'source' distinguishes
+    a real Razorpay payment from an admin manually recording an earlier
+    cash/offline deposit."""
+
+    __tablename__ = "deposit_payments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_username = Column(String(255), nullable=False)
+    amount = Column(Float, nullable=False)
+    source = Column(String(20), nullable=False)  # "razorpay" or "manual"
+    payment_id = Column(String(255), nullable=True)
+    notes = Column(String(500), nullable=True)
+    paid_date = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class TransactionLog(Base):

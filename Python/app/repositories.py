@@ -1,8 +1,9 @@
 from typing import List, Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models import Complaint, Occupant, TenantBill, TransactionLog, User
+from app.models import Complaint, DepositPayment, Occupant, TenantBill, TransactionLog, User
 
 
 class UserRepository:
@@ -122,3 +123,21 @@ class OccupantRepository:
     def delete(self, occupant: Occupant) -> None:
         self.db.delete(occupant)
         self.db.commit()
+
+
+class DepositRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def find_by_tenant_order_by_date_desc(self, tenant_username: str) -> List[DepositPayment]:
+        return self.db.query(DepositPayment).filter(DepositPayment.tenant_username == tenant_username).order_by(DepositPayment.paid_date.desc()).all()
+
+    def total_for_tenant(self, tenant_username: str) -> float:
+        total = self.db.query(func.sum(DepositPayment.amount)).filter(DepositPayment.tenant_username == tenant_username).scalar()
+        return float(total) if total is not None else 0.0
+
+    def save(self, payment: DepositPayment) -> DepositPayment:
+        self.db.add(payment)
+        self.db.commit()
+        self.db.refresh(payment)
+        return payment

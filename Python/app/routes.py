@@ -14,8 +14,8 @@ from app.auth import generate_token, require_auth, require_role, require_self_or
 from app.database import get_db
 from app.models import Complaint, Occupant, TenantBill, User
 from app.payments import PaymentService
-from app.repositories import ComplaintRepository, OccupantRepository, TenantBillRepository, TransactionLogRepository, UserRepository
-from app.services import ComplaintService, EmailService, LoginLockedError, LoginThrottle, OccupantService, OTPCooldownError, OTPService, TenantBillService, TransactionService, UserService, fetch_uploaded_file, to_iso_utc, verify_password
+from app.repositories import ComplaintRepository, DepositRepository, OccupantRepository, TenantBillRepository, TransactionLogRepository, UserRepository
+from app.services import ComplaintService, DepositService, EmailService, LoginLockedError, LoginThrottle, OccupantService, OTPCooldownError, OTPService, TenantBillService, TransactionService, UserService, fetch_uploaded_file, to_iso_utc, verify_password
 
 logger = logging.getLogger("app.auth")
 
@@ -310,6 +310,68 @@ def register_routes(app: Flask) -> None:
             "role": user.role,
             "registrationCompleted": user.registration_completed,
         }), 200
+
+    @app.route("/api/users/<int:user_id>/movein-deposit", methods=["PUT"])
+    @require_role("ADMIN")
+    def update_movein_deposit(user_id: int):
+        data = request.get_json(silent=True) or {}
+        db = get_db()
+        deposit_service = DepositService(DepositRepository(db), UserRepository(db))
+        try:
+            if data.get("moveInDate"):
+                deposit_service.set_move_in_date(user_id, data["moveInDate"])
+            if data.get("manualDepositAmount"):
+                deposit_service.add_manual_deposit(user_id, float(data["manualDepositAmount"]), data.get("notes"))
+            user = UserRepository(db).find_by_id(user_id)
+            if user is None:
+                return jsonify({"error": "User not found"}), 404
+            return jsonify(deposit_service.get_summary(user.username)), 200
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.route("/api/users/me/movein-deposit", methods=["GET"])
+    @require_auth
+    def get_movein_deposit():
+        username = request.args.get("username") or g.current_user["username"]
+        if g.current_user["role"] != "ADMIN" and username != g.current_user["username"]:
+            return jsonify({"error": "Forbidden"}), 403
+        db = get_db()
+        deposit_service = DepositService(DepositRepository(db), UserRepository(db))
+        try:
+            return jsonify(deposit_service.get_summary(username)), 200
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 404
+
+    @app.route("/api/users/deposit/createOrder", methods=["POST"])
+    @require_auth
+    def create_deposit_order():
+        data = request.get_json(silent=True) or {}
+        db = get_db()
+        payment_service = PaymentService(TenantBillRepository(db))
+        try:
+            amount = float(data.get("amount"))
+            return jsonify(payment_service.create_deposit_order(g.current_user["username"], amount)), 200
+        except (TypeError, ValueError) as exc:
+            return jsonify({"error": str(exc) or "Invalid amount"}), 400
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 503
+
+    @app.route("/api/users/deposit/verify", methods=["POST"])
+    @require_auth
+    def verify_deposit():
+        data = request.get_json(silent=True) or {}
+        db = get_db()
+        payment_service = PaymentService(TenantBillRepository(db))
+        username = g.current_user["username"]
+        try:
+            amount = payment_service.verify_deposit_payment(username, data.get("orderId"), data.get("paymentId"), data.get("signature"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 503
+        deposit_service = DepositService(DepositRepository(db), UserRepository(db))
+        summary = deposit_service.record_payment(username, amount, data.get("paymentId"))
+        return jsonify(summary), 200
 
     @app.route("/api/users/delete/<int:user_id>", methods=["DELETE"])
     @require_role("ADMIN")

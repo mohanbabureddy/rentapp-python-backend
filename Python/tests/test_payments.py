@@ -127,6 +127,62 @@ class PaymentServiceTest(unittest.TestCase):
         service.verify_payment(1, "order_abc", "pay_1", "sig")  # should not raise
         mock_client.utility.verify_payment_signature.assert_called_once()
 
+    # -- deposit orders/verification --------------------------------------------------
+
+    @patch("app.payments.razorpay.Client")
+    def test_create_deposit_order_rejects_non_positive_amount(self, mock_client_cls):
+        service = PaymentService(self.repo)
+        with self.assertRaises(ValueError):
+            service.create_deposit_order("Room1", 0)
+        with self.assertRaises(ValueError):
+            service.create_deposit_order("Room1", -100)
+
+    @patch("app.payments.razorpay.Client")
+    def test_create_deposit_order_converts_rupees_to_paise(self, mock_client_cls):
+        mock_client = mock_client_cls.return_value
+        mock_client.order.create.return_value = {"id": "order_dep1"}
+
+        service = PaymentService(self.repo)
+        result = service.create_deposit_order("Room1", 500)
+
+        call_args = mock_client.order.create.call_args[0][0]
+        self.assertEqual(call_args["amount"], 50000)
+        self.assertEqual(call_args["notes"], {"purpose": "deposit", "username": "Room1"})
+        self.assertEqual(call_args["payment_capture"], 1)
+        self.assertEqual(result["orderId"], "order_dep1")
+
+    @patch("app.payments.razorpay.Client")
+    def test_verify_deposit_payment_wrong_username_raises(self, mock_client_cls):
+        mock_client = mock_client_cls.return_value
+        mock_client.order.fetch.return_value = {"notes": {"purpose": "deposit", "username": "OtherTenant"}}
+        mock_client.payment.fetch.return_value = {"status": "captured"}
+
+        service = PaymentService(self.repo)
+        with self.assertRaises(ValueError):
+            service.verify_deposit_payment("Room1", "order_dep1", "pay_1", "sig")
+
+    @patch("app.payments.razorpay.Client")
+    def test_verify_deposit_payment_not_captured_raises(self, mock_client_cls):
+        mock_client = mock_client_cls.return_value
+        mock_client.order.fetch.return_value = {"notes": {"purpose": "deposit", "username": "Room1"}}
+        mock_client.payment.fetch.return_value = {"status": "authorized"}
+
+        service = PaymentService(self.repo)
+        with self.assertRaises(ValueError):
+            service.verify_deposit_payment("Room1", "order_dep1", "pay_1", "sig")
+
+    @patch("app.payments.razorpay.Client")
+    def test_verify_deposit_payment_success_returns_rupees(self, mock_client_cls):
+        mock_client = mock_client_cls.return_value
+        mock_client.order.fetch.return_value = {"amount": 50000, "notes": {"purpose": "deposit", "username": "Room1"}}
+        mock_client.payment.fetch.return_value = {"status": "captured"}
+
+        service = PaymentService(self.repo)
+        amount = service.verify_deposit_payment("Room1", "order_dep1", "pay_1", "sig")
+
+        self.assertEqual(amount, 500.0)
+        mock_client.utility.verify_payment_signature.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
