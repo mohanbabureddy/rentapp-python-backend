@@ -4,7 +4,7 @@ import logging
 import mimetypes
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from flask import Flask, Response, g, jsonify, request
 from werkzeug.security import generate_password_hash
@@ -18,6 +18,17 @@ from app.repositories import ComplaintRepository, DepositRepository, OccupantRep
 from app.services import ComplaintService, DepositService, EmailService, LoginLockedError, LoginThrottle, OccupantService, OTPCooldownError, OTPService, TenantBillService, TransactionService, UserService, fetch_uploaded_file, to_iso_utc, verify_password
 
 logger = logging.getLogger("app.auth")
+
+
+def _parse_optional_float(value: Any) -> Optional[float]:
+    """Bill amount fields are nullable Float columns, but a form that hides a
+    field for the current bill type (e.g. no Electricity input on a Rent
+    bill) still submits it as "" rather than omitting it -- Postgres rejects
+    an empty string for a numeric column outright, so this must normalize
+    "" (and None) to None before it ever reaches the model."""
+    if value is None or value == "":
+        return None
+    return float(value)
 
 
 def register_routes(app: Flask) -> None:
@@ -472,10 +483,10 @@ def register_routes(app: Flask) -> None:
             tenant_name=data.get("tenantName"),
             month_year=data.get("monthYear"),
             bill_type=(data.get("billType") or "RENT").upper(),
-            rent=data.get("rent"),
-            water=data.get("water"),
-            electricity=data.get("electricity"),
-            miscellaneous=data.get("miscellaneous"),
+            rent=_parse_optional_float(data.get("rent")),
+            water=_parse_optional_float(data.get("water")),
+            electricity=_parse_optional_float(data.get("electricity")),
+            miscellaneous=_parse_optional_float(data.get("miscellaneous")),
             paid=False,
         )
         db = get_db()
@@ -531,10 +542,10 @@ def register_routes(app: Flask) -> None:
         updated = TenantBill(
             tenant_name=data.get("tenantName"),
             month_year=data.get("monthYear"),
-            rent=data.get("rent"),
-            water=data.get("water"),
-            electricity=data.get("electricity"),
-            miscellaneous=data.get("miscellaneous"),
+            rent=_parse_optional_float(data.get("rent")),
+            water=_parse_optional_float(data.get("water")),
+            electricity=_parse_optional_float(data.get("electricity")),
+            miscellaneous=_parse_optional_float(data.get("miscellaneous")),
         )
         try:
             return jsonify({"message": service.update_bill(bill_id, updated)}), 200
