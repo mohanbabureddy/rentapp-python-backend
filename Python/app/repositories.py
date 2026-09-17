@@ -136,6 +136,12 @@ class DepositRepository:
         total = self.db.query(func.sum(DepositPayment.amount)).filter(DepositPayment.tenant_username == tenant_username).scalar()
         return float(total) if total is not None else 0.0
 
+    def totals_by_tenant(self) -> dict:
+        """One GROUP BY query for every tenant's total, instead of N+1 -- used
+        by the admin user list, which needs every row's total at once."""
+        rows = self.db.query(DepositPayment.tenant_username, func.sum(DepositPayment.amount)).group_by(DepositPayment.tenant_username).all()
+        return {username: float(total) for username, total in rows}
+
     def save(self, payment: DepositPayment) -> DepositPayment:
         self.db.add(payment)
         self.db.commit()

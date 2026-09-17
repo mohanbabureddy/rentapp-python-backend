@@ -261,6 +261,7 @@ def register_routes(app: Flask) -> None:
         db = get_db()
         repo = UserRepository(db)
         users = repo.find_all()
+        deposit_totals = DepositRepository(db).totals_by_tenant()
         return jsonify([
             {
                 "id": u.id,
@@ -269,6 +270,8 @@ def register_routes(app: Flask) -> None:
                 "mail": u.mail,
                 "role": u.role,
                 "registrationCompleted": u.registration_completed,
+                "moveInDate": u.move_in_date.isoformat() if u.move_in_date else None,
+                "totalAmountDeposited": deposit_totals.get(u.username, 0.0),
             }
             for u in users
         ]), 200
