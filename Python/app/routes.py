@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import mimetypes
 import os
 from datetime import datetime, timezone
@@ -18,6 +19,14 @@ from app.repositories import ComplaintRepository, DepositRepository, OccupantRep
 from app.services import ComplaintService, DepositService, EmailService, LoginLockedError, LoginThrottle, OccupantService, OTPCooldownError, OTPService, TenantBillService, TransactionService, UserService, fetch_uploaded_file, to_iso_utc, verify_password
 
 logger = logging.getLogger("app.auth")
+
+
+def _normalize_phone(value):
+    """Return a bare 10-digit Indian mobile number, or None if `value` isn't one.
+    Accepts spaces/dashes and an optional +91 / 91 / 0 prefix."""
+    digits = re.sub(r"[\s\-()]", "", str(value or ""))
+    digits = re.sub(r"^(\+91|91|0)(?=\d{10}$)", "", digits)
+    return digits if re.fullmatch(r"[6-9]\d{9}", digits) else None
 
 
 def _parse_optional_float(value: Any) -> Optional[float]:
@@ -130,6 +139,9 @@ def register_routes(app: Flask) -> None:
         email = data.get("email")
         if not username or not email:
             return jsonify({"error": "username,email required"}), 400
+        phone = _normalize_phone(data.get("phone"))
+        if phone is None:
+            return jsonify({"error": "Enter a valid 10-digit mobile number"}), 400
 
         db = get_db()
         repo = UserRepository(db)
@@ -142,6 +154,7 @@ def register_routes(app: Flask) -> None:
             return jsonify({"error": "Registration already completed"}), 409
 
         user.mail = email.strip()
+        user.phone = phone
         repo.save(user)
         try:
             otp_service.generate_otp(user.mail)
@@ -314,7 +327,10 @@ def register_routes(app: Flask) -> None:
         if data.get("mail"):
             user.mail = data["mail"]
         if data.get("phone"):
-            user.phone = data["phone"]
+            phone = _normalize_phone(data["phone"])
+            if phone is None:
+                return jsonify({"error": "Enter a valid 10-digit mobile number"}), 400
+            user.phone = phone
         repo.save(user)
         logger.info("Admin updated user '%s' (id=%s, fields=%s).", user.username, user_id, list(data.keys()))
         return jsonify({

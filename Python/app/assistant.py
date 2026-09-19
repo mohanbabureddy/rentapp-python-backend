@@ -86,13 +86,14 @@ class AssistantService:
             )
 
         return (
-            "You are a helpful assistant inside a rent management app, answering only "
-            f"for the tenant '{tenant.username}'. Use ONLY the data below -- never invent "
+            "You are the support assistant of a rent management app. You are NOT the tenant. "
+            f"The person chatting with you is the tenant named '{tenant.username}'; address them "
+            "as 'you'. Answer their questions. Use ONLY the data below -- never invent "
             "bank account numbers, UPI IDs, or any payment detail that isn't given here. "
             "Rent and electricity are separate bills, each paid entirely inside this app via the 'Pay' button on the tenant's "
             "Bills page (a Razorpay checkout popup); there is no separate bank transfer or "
             "UPI payment to make. If asked something this data doesn't cover, say so honestly "
-            "instead of guessing. Keep answers short and direct.\n\n"
+            "instead of guessing. You cannot take any action (you cannot file complaints, send messages, or contact anyone); only answer questions from the data. Keep answers short and direct.\n\n"
             f"{admin_block}\n\n{deposit_block}\n\n"
             f"Tenant's bill history (most recent first):\n{bills_block}"
         )
