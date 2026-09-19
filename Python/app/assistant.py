@@ -3,6 +3,7 @@ import os
 from typing import List, Optional
 
 import anthropic
+import requests
 
 from app.models import TenantBill, User
 from app.repositories import TenantBillRepository, UserRepository
@@ -20,8 +21,27 @@ class AssistantService:
     def __init__(self, bill_repo: TenantBillRepository, user_repo: UserRepository):
         self.bill_repo = bill_repo
         self.user_repo = user_repo
+        self._provider = os.getenv("LLM_PROVIDER", "anthropic").strip().lower()
+        self._ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+        self._ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
         api_key = os.getenv("ANTHROPIC_API_KEY")
         self._client = anthropic.Anthropic(api_key=api_key) if api_key else None
+
+    def _ask_ollama(self, system_prompt: str, message: str) -> str:
+        resp = requests.post(
+            f"{self._ollama_url}/api/chat",
+            json={
+                "model": self._ollama_model,
+                "stream": False,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message},
+                ],
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json().get("message", {}).get("content", "")
 
     def _admin_contact(self) -> Optional[User]:
         for user in self.user_repo.find_all():
@@ -61,7 +81,7 @@ class AssistantService:
         )
 
     def ask(self, username: str, message: str) -> str:
-        if self._client is None:
+        if self._provider != "ollama" and self._client is None:
             raise RuntimeError("The assistant isn't configured yet (missing ANTHROPIC_API_KEY in .env).")
         if not message or not message.strip():
             raise ValueError("Message required")
@@ -74,17 +94,20 @@ class AssistantService:
 
         logger.info("Assistant question from '%s': %s", username, message[:200])
         try:
-            response = self._client.messages.create(
-                model=MODEL,
-                max_tokens=1024,
-                system=system_prompt,
-                output_config={"effort": "low"},
-                messages=[{"role": "user", "content": message.strip()}],
-            )
-        except anthropic.APIError:
+            if self._provider == "ollama":
+                answer = self._ask_ollama(system_prompt, message.strip())
+            else:
+                response = self._client.messages.create(
+                    model=MODEL,
+                    max_tokens=1024,
+                    system=system_prompt,
+                    output_config={"effort": "low"},
+                    messages=[{"role": "user", "content": message.strip()}],
+                )
+                answer = next((block.text for block in response.content if block.type == "text"), "")
+        except (anthropic.APIError, requests.RequestException):
             logger.exception("Assistant API call failed for '%s'.", username)
             raise RuntimeError("Assistant is temporarily unavailable. Please try again shortly.")
 
-        answer = next((block.text for block in response.content if block.type == "text"), "")
         logger.info("Assistant answered '%s' (%d chars).", username, len(answer))
         return answer
