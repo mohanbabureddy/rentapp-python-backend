@@ -15,6 +15,7 @@ logger = logging.getLogger("app.assistant")
 MODEL = "claude-opus-5"
 
 DEPOSIT_QUESTION = re.compile(r"deposit|advance", re.I)
+BILLS_QUESTION = re.compile(r"\bbills?\b|\bowe\b|\bdues?\b|outstanding|pending amount|unpaid|how much .*pay", re.I)
 IST_OFFSET = timedelta(hours=5, minutes=30)
 
 
@@ -53,6 +54,37 @@ class AssistantService:
         )
         resp.raise_for_status()
         return resp.json().get("message", {}).get("content", "")
+
+    @staticmethod
+    def _bill_line(b: TenantBill) -> str:
+        total = (b.rent or 0) + (b.water or 0) + (b.electricity or 0) + (b.miscellaneous or 0)
+        if b.bill_type == "ELECTRICITY":
+            return f"{b.month_year} Electricity: {_rupees(total)}"
+        parts = [f"rent {_rupees(b.rent)}", f"water {_rupees(b.water)}"]
+        if b.miscellaneous:
+            parts.append(f"misc {_rupees(b.miscellaneous)}")
+        return f"{b.month_year} Rent: {_rupees(total)} ({', '.join(parts)})"
+
+    def _bills_reply(self, bills: List[TenantBill]) -> str:
+        """Exact bill summary from the database (not model-generated)."""
+        if not bills:
+            return "You have no bills yet."
+        ordered = sorted(bills, key=lambda b: (b.month_year or "", b.bill_type or ""), reverse=True)
+        unpaid = [b for b in ordered if not b.paid]
+        paid = [b for b in ordered if b.paid][:3]
+        lines = []
+        if unpaid:
+            due = sum((b.rent or 0) + (b.water or 0) + (b.electricity or 0) + (b.miscellaneous or 0) for b in unpaid)
+            lines.append("Unpaid bills:")
+            lines += [f"- {self._bill_line(b)}" for b in unpaid]
+            lines.append(f"Total due: {_rupees(due)}")
+            lines.append("Pay from the My Bills page using the Pay button on each bill.")
+        else:
+            lines.append("You have no unpaid bills. All paid up!")
+        if paid:
+            lines += ["", "Recently paid:"]
+            lines += [f"- {self._bill_line(b)}" for b in paid]
+        return "\n".join(lines)
 
     def _deposit_reply(self, tenant: User) -> str:
         """Exact deposit summary + date-wise payments, built from the ledger
@@ -146,9 +178,11 @@ class AssistantService:
             raise ValueError("Tenant not found")
         if DEPOSIT_QUESTION.search(message):
             return self._deposit_reply(tenant)
+        bills = self.bill_repo.find_by_tenant_name_order_by_month_desc(username)
+        if BILLS_QUESTION.search(message):
+            return self._bills_reply(bills)
         if self._provider != "ollama" and self._client is None:
             raise RuntimeError("The assistant isn't configured yet (missing ANTHROPIC_API_KEY in .env).")
-        bills = self.bill_repo.find_by_tenant_name_order_by_month_desc(username)
         system_prompt = self._build_system_prompt(tenant, bills)
 
         logger.info("Assistant question from '%s': %s", username, message[:200])

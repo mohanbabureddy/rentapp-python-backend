@@ -43,5 +43,37 @@ class DepositReplyTest(unittest.TestCase):
         self.assertIn("Remaining: Rs.5,000", reply)
 
 
+def _bill_service(bills):
+    users = N(find_by_username=lambda u: N(username=u, full_name="Ravindra", demanded_deposit=None))
+    bill_repo = N(find_by_tenant_name_order_by_month_desc=lambda u: bills)
+    return AssistantService(bill_repo, users, N(total_for_tenant=lambda u: 0))
+
+
+def _bill(month, kind, paid, rent=0, water=0, elec=0, misc=None):
+    return N(month_year=month, bill_type=kind, paid=paid, rent=rent, water=water, electricity=elec, miscellaneous=misc)
+
+
+class BillsReplyTest(unittest.TestCase):
+    def test_lists_unpaid_with_total_due(self):
+        bills = [
+            _bill("2026-09", "RENT", False, rent=10000, water=300, misc=200),
+            _bill("2026-09", "ELECTRICITY", False, elec=850),
+            _bill("2026-08", "RENT", True, rent=10000, water=300),
+        ]
+        reply = _bill_service(bills).ask("Room1", "My bills")
+        self.assertIn("2026-09 Rent: Rs.10,500 (rent Rs.10,000, water Rs.300, misc Rs.200)", reply)
+        self.assertIn("2026-09 Electricity: Rs.850", reply)
+        self.assertIn("Total due: Rs.11,350", reply)
+        self.assertIn("Recently paid:", reply)
+        self.assertIn("2026-08 Rent: Rs.10,300", reply)
+
+    def test_all_paid(self):
+        reply = _bill_service([_bill("2026-08", "RENT", True, rent=1000)]).ask("Room1", "what do I owe")
+        self.assertIn("no unpaid bills", reply)
+
+    def test_no_bills(self):
+        self.assertEqual(_bill_service([]).ask("Room1", "my bills"), "You have no bills yet.")
+
+
 if __name__ == "__main__":
     unittest.main()
