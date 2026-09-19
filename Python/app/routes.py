@@ -747,7 +747,7 @@ def register_routes(app: Flask) -> None:
         data = request.get_json(silent=True) or {}
         message = data.get("message", "")
         db = get_db()
-        service = AssistantService(TenantBillRepository(db), UserRepository(db))
+        service = AssistantService(TenantBillRepository(db), UserRepository(db), DepositRepository(db))
         try:
             answer = service.ask(g.current_user["username"], message)
             return jsonify({"answer": answer}), 200

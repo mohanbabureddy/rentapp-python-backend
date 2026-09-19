@@ -6,7 +6,7 @@ import anthropic
 import requests
 
 from app.models import TenantBill, User
-from app.repositories import TenantBillRepository, UserRepository
+from app.repositories import DepositRepository, TenantBillRepository, UserRepository
 
 logger = logging.getLogger("app.assistant")
 
@@ -18,8 +18,9 @@ class AssistantService:
     only that tenant's own bill data -- never another tenant's, and never anything
     fabricated (bank/UPI details the app doesn't actually have on file)."""
 
-    def __init__(self, bill_repo: TenantBillRepository, user_repo: UserRepository):
+    def __init__(self, bill_repo: TenantBillRepository, user_repo: UserRepository, deposit_repo: DepositRepository):
         self.bill_repo = bill_repo
+        self.deposit_repo = deposit_repo
         self.user_repo = user_repo
         self._provider = os.getenv("LLM_PROVIDER", "anthropic").strip().lower()
         self._ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
@@ -54,12 +55,17 @@ class AssistantService:
         recent = sorted(bills, key=lambda b: b.month_year or "", reverse=True)[:12]
         bill_lines = []
         for b in recent:
-            total = (b.rent or 0) + (b.water or 0) + (b.electricity or 0)
+            total = (b.rent or 0) + (b.water or 0) + (b.electricity or 0) + (b.miscellaneous or 0)
             status = "PAID" if b.paid else "UNPAID"
-            bill_lines.append(
-                f"- {b.month_year}: rent=Rs.{b.rent or 0}, water=Rs.{b.water or 0}, "
-                f"electricity=Rs.{b.electricity or 0}, total=Rs.{total}, status={status}"
-            )
+            if b.bill_type == "ELECTRICITY":
+                bill_lines.append(
+                    f"- {b.month_year} ELECTRICITY bill: amount=Rs.{b.electricity or 0}, status={status}"
+                )
+            else:
+                bill_lines.append(
+                    f"- {b.month_year} RENT bill: rent=Rs.{b.rent or 0}, water=Rs.{b.water or 0}, "
+                    f"miscellaneous=Rs.{b.miscellaneous or 0}, total=Rs.{total}, status={status}"
+                )
         bills_block = "\n".join(bill_lines) if bill_lines else "No bills on record."
 
         admin_block = (
@@ -68,15 +74,26 @@ class AssistantService:
             if admin else "No admin contact is on file."
         )
 
+        demanded = tenant.demanded_deposit
+        paid_deposit = self.deposit_repo.total_for_tenant(tenant.username)
+        if demanded is None:
+            deposit_block = f"Security deposit: paid so far Rs.{paid_deposit}; no demanded amount is set."
+        else:
+            deposit_block = (
+                f"Security deposit: demanded Rs.{demanded}, paid so far Rs.{paid_deposit}, "
+                f"remaining Rs.{max(demanded - paid_deposit, 0)}. The tenant can pay deposit "
+                "in instalments using 'Pay Deposit' at the top of the My Bills page."
+            )
+
         return (
             "You are a helpful assistant inside a rent management app, answering only "
             f"for the tenant '{tenant.username}'. Use ONLY the data below -- never invent "
             "bank account numbers, UPI IDs, or any payment detail that isn't given here. "
-            "Rent is paid entirely inside this app via the 'Pay Now' button on the tenant's "
+            "Rent and electricity are separate bills, each paid entirely inside this app via the 'Pay' button on the tenant's "
             "Bills page (a Razorpay checkout popup); there is no separate bank transfer or "
             "UPI payment to make. If asked something this data doesn't cover, say so honestly "
             "instead of guessing. Keep answers short and direct.\n\n"
-            f"{admin_block}\n\n"
+            f"{admin_block}\n\n{deposit_block}\n\n"
             f"Tenant's bill history (most recent first):\n{bills_block}"
         )
 
