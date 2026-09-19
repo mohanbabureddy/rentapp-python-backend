@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import secrets
 import mimetypes
 import os
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from werkzeug.security import generate_password_hash
 
 from app.assistant import AssistantService
 from app.auth import generate_token, require_auth, require_role, require_self_or_admin
+from app.bulk_bills import BulkError, MAX_BYTES, build_template, check_kind, import_planned, plan_rows, public_rows, read_rows, summarize
 from app.database import get_db
 from app.debug_trace import trace_request
 from app.models import Complaint, Occupant, TenantBill, User
@@ -95,11 +97,12 @@ def register_routes(app: Flask) -> None:
     @require_role("ADMIN")
     def add_user():
         data = request.get_json(silent=True) or {}
-        username = data.get("username")
-        role = data.get("role")
-        password = data.get("password")
-        if not username or not role or not password:
-            return jsonify({"error": "username,password & role required"}), 400
+        username = (data.get("username") or "").strip()
+        role = (data.get("role") or "TENANT").upper()
+        if not username:
+            return jsonify({"error": "username required"}), 400
+        if role not in ("ADMIN", "TENANT"):
+            return jsonify({"error": "role must be ADMIN or TENANT"}), 400
 
         db = get_db()
         repo = UserRepository(db)
@@ -107,6 +110,10 @@ def register_routes(app: Flask) -> None:
             logger.warning("Add-user rejected: username '%s' already exists.", username)
             return jsonify({"error": "User already exists"}), 409
 
+        # The tenant chooses their own password when they register. Until then the
+        # account holds a random one nobody knows, and login is blocked anyway
+        # because registration_completed is False.
+        password = data.get("password") or secrets.token_urlsafe(32)
         user = User(username=username, password=generate_password_hash(password), role=role, registration_completed=False)
         saved = repo.save(user)
         logger.info("Admin created new user account '%s' (role=%s).", saved.username, saved.role)
@@ -522,6 +529,43 @@ def register_routes(app: Flask) -> None:
             return jsonify({"message": "Bill added successfully and notification triggered."}), 200
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 409
+
+    @app.route("/api/tenants/bulkBills", methods=["POST"])
+    @require_role("ADMIN")
+    def bulk_bills():
+        upload = request.files.get("file")
+        if upload is None or not upload.filename:
+            return jsonify({"error": "Choose an Excel (.xlsx) or CSV file first."}), 400
+        data = upload.read(MAX_BYTES + 1)
+        if len(data) > MAX_BYTES:
+            return jsonify({"error": "The file is too large (limit 1 MB)."}), 400
+        dry_run = (request.form.get("dryRun") or "true").lower() != "false"
+        db = get_db()
+        bill_repo = TenantBillRepository(db)
+        try:
+            kind = check_kind(request.form.get("kind"))
+            rows = read_rows(upload.filename, data, kind)
+            planned = plan_rows(rows, kind, (request.form.get("month") or "").strip() or None, UserRepository(db), bill_repo)
+        except BulkError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if not dry_run:
+            import_planned(planned, TenantBillService(bill_repo, UserRepository(db), email_service))
+            logger.info("Bulk bill import by '%s': %s", g.current_user["username"], summarize(planned))
+        return jsonify({"dryRun": dry_run, "summary": summarize(planned), "rows": public_rows(planned)}), 200
+
+    @app.route("/api/tenants/bulkBills/template", methods=["GET"])
+    @require_role("ADMIN")
+    def bulk_bills_template():
+        kind = request.args.get("type", "")
+        try:
+            content = build_template(kind)
+        except BulkError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return Response(
+            content,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=bills-{kind}-template.xlsx"},
+        )
 
     @app.route("/api/tenants/all", methods=["GET"])
     @require_role("ADMIN")
