@@ -396,6 +396,19 @@ class ComplaintService:
         self.logger.info("Closed complaint %s for tenant %s.", complaint_id, saved.tenant_name)
         return saved
 
+    def withdraw_complaint(self, complaint_id: int) -> Complaint:
+        complaint = self.repo.find_by_id(complaint_id)
+        if complaint is None:
+            raise ValueError("Complaint not found")
+        if complaint.status == "CLOSED":
+            raise ValueError("This complaint is already closed")
+        complaint.status = "CLOSED"
+        complaint.closed_date = datetime.utcnow()
+        complaint.resolution_comment = "Withdrawn by tenant"
+        saved = self.repo.save(complaint)
+        self.logger.info("Tenant %s withdrew complaint %s.", saved.tenant_name, complaint_id)
+        return saved
+
 
 class OccupantService:
     def __init__(self, repo: OccupantRepository, user_repo: UserRepository):

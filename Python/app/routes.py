@@ -654,6 +654,20 @@ def register_routes(app: Flask) -> None:
             for c in complaints
         ]), 200
 
+    def _complaint_owner(complaint_id: int):
+        c = ComplaintRepository(get_db()).find_by_id(complaint_id)
+        return c.tenant_name if c else None
+
+    @app.route("/api/tenants/complaints/<int:complaint_id>/withdraw", methods=["PUT"])
+    @require_self_or_admin(_complaint_owner)
+    def withdraw_complaint(complaint_id: int):
+        service = ComplaintService(ComplaintRepository(get_db()))
+        try:
+            service.withdraw_complaint(complaint_id)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"message": "Complaint withdrawn"}), 200
+
     @app.route("/api/tenants/complaints/<int:complaint_id>/close", methods=["PUT"])
     @require_role("ADMIN")
     def close_complaint(complaint_id: int):
