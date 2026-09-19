@@ -142,6 +142,9 @@ def register_routes(app: Flask) -> None:
         phone = _normalize_phone(data.get("phone"))
         if phone is None:
             return jsonify({"error": "Enter a valid 10-digit mobile number"}), 400
+        full_name = " ".join(str(data.get("fullName") or "").split())
+        if len(full_name) < 2 or len(full_name) > 100:
+            return jsonify({"error": "Enter your full name"}), 400
 
         db = get_db()
         repo = UserRepository(db)
@@ -155,6 +158,7 @@ def register_routes(app: Flask) -> None:
 
         user.mail = email.strip()
         user.phone = phone
+        user.full_name = full_name
         repo.save(user)
         try:
             otp_service.generate_otp(user.mail)
@@ -227,7 +231,7 @@ def register_routes(app: Flask) -> None:
         LoginThrottle.record_success(username)
         logger.info("User '%s' logged in successfully (role=%s).", username, user.role)
         token = generate_token(user.username, user.role)
-        return jsonify({"username": user.username, "role": user.role, "token": token}), 200
+        return jsonify({"username": user.username, "fullName": user.full_name, "role": user.role, "token": token}), 200
 
     @app.route("/api/users/forgot-password", methods=["POST"])
     def forgot_password():
@@ -291,6 +295,7 @@ def register_routes(app: Flask) -> None:
                 "id": u.id,
                 "username": u.username,
                 "phone": u.phone,
+                "fullName": u.full_name,
                 "mail": u.mail,
                 "role": u.role,
                 "registrationCompleted": u.registration_completed,
@@ -326,6 +331,8 @@ def register_routes(app: Flask) -> None:
             user.password = generate_password_hash(data["password"])
         if data.get("mail"):
             user.mail = data["mail"]
+        if data.get("fullName"):
+            user.full_name = " ".join(str(data["fullName"]).split())[:100]
         if data.get("phone"):
             phone = _normalize_phone(data["phone"])
             if phone is None:
@@ -337,6 +344,7 @@ def register_routes(app: Flask) -> None:
             "id": user.id,
             "username": user.username,
             "phone": user.phone,
+            "fullName": user.full_name,
             "mail": user.mail,
             "role": user.role,
             "registrationCompleted": user.registration_completed,

@@ -1,5 +1,7 @@
 import logging
 import os
+import re
+from datetime import timedelta
 from typing import List, Optional
 
 import anthropic
@@ -11,6 +13,14 @@ from app.repositories import DepositRepository, TenantBillRepository, UserReposi
 logger = logging.getLogger("app.assistant")
 
 MODEL = "claude-opus-5"
+
+DEPOSIT_QUESTION = re.compile(r"deposit|advance", re.I)
+IST_OFFSET = timedelta(hours=5, minutes=30)
+
+
+def _rupees(amount) -> str:
+    amount = float(amount or 0)
+    return f"Rs.{amount:,.0f}" if amount == int(amount) else f"Rs.{amount:,.2f}"
 
 
 class AssistantService:
@@ -44,6 +54,35 @@ class AssistantService:
         resp.raise_for_status()
         return resp.json().get("message", {}).get("content", "")
 
+    def _deposit_reply(self, tenant: User) -> str:
+        """Exact deposit summary + date-wise payments, built from the ledger
+        (not model-generated, so amounts and dates are never paraphrased wrongly)."""
+        history = sorted(
+            self.deposit_repo.find_by_tenant_order_by_date_desc(tenant.username),
+            key=lambda p: p.paid_date,
+        )
+        paid = self.deposit_repo.total_for_tenant(tenant.username)
+        demanded = tenant.demanded_deposit
+        lines = ["Your security deposit:"]
+        if demanded is not None:
+            lines += [
+                f"Demanded: {_rupees(demanded)}",
+                f"Paid so far: {_rupees(paid)}",
+                f"Remaining: {_rupees(max(demanded - paid, 0))}",
+            ]
+        else:
+            lines.append(f"Paid so far: {_rupees(paid)} (no demanded amount has been set)")
+        if history:
+            lines += ["", "Payments, date-wise:"]
+            for p in history:
+                when = (p.paid_date + IST_OFFSET).strftime("%d %b %Y, %I:%M %p")
+                how = "Paid online" if p.source == "razorpay" else "Recorded by owner"
+                note = f" ({p.notes})" if p.notes else ""
+                lines.append(f"{when} - {_rupees(p.amount)} - {how}{note}")
+        else:
+            lines += ["", "No deposit payments recorded yet."]
+        return "\n".join(lines)
+
     def _admin_contact(self) -> Optional[User]:
         for user in self.user_repo.find_all():
             if user.role == "ADMIN":
@@ -69,7 +108,7 @@ class AssistantService:
         bills_block = "\n".join(bill_lines) if bill_lines else "No bills on record."
 
         admin_block = (
-            f"Property manager / admin contact: username={admin.username}, "
+            f"Property manager / owner contact: name={admin.full_name or admin.username}, "
             f"email={admin.mail or 'not on file'}, phone={admin.phone or 'not on file'}."
             if admin else "No admin contact is on file."
         )
@@ -87,7 +126,7 @@ class AssistantService:
 
         return (
             "You are the support assistant of a rent management app. You are NOT the tenant. "
-            f"The person chatting with you is the tenant named '{tenant.username}'; address them "
+            f"The person chatting with you is the tenant named '{tenant.full_name or tenant.username}'; address them "
             "as 'you'. Answer their questions. Use ONLY the data below -- never invent "
             "bank account numbers, UPI IDs, or any payment detail that isn't given here. "
             "Rent and electricity are separate bills, each paid entirely inside this app via the 'Pay' button on the tenant's "
@@ -99,14 +138,16 @@ class AssistantService:
         )
 
     def ask(self, username: str, message: str) -> str:
-        if self._provider != "ollama" and self._client is None:
-            raise RuntimeError("The assistant isn't configured yet (missing ANTHROPIC_API_KEY in .env).")
         if not message or not message.strip():
             raise ValueError("Message required")
 
         tenant = self.user_repo.find_by_username(username)
         if tenant is None:
             raise ValueError("Tenant not found")
+        if DEPOSIT_QUESTION.search(message):
+            return self._deposit_reply(tenant)
+        if self._provider != "ollama" and self._client is None:
+            raise RuntimeError("The assistant isn't configured yet (missing ANTHROPIC_API_KEY in .env).")
         bills = self.bill_repo.find_by_tenant_name_order_by_month_desc(username)
         system_prompt = self._build_system_prompt(tenant, bills)
 

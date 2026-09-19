@@ -99,6 +99,19 @@ def log_responses(response):
 
 
 Base.metadata.create_all(bind=engine)
+
+
+def _ensure_user_full_name_column():
+    # create_all never alters an existing table, so add the column on databases
+    # created before `full_name` existed.
+    from sqlalchemy import inspect, text
+    if "full_name" not in {c["name"] for c in inspect(engine).get_columns("users")}:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN full_name VARCHAR(100)"))
+        app.logger.info("Added users.full_name column.")
+
+
+_ensure_user_full_name_column()
 register_routes(app)
 app.logger.info("Application startup complete")
 
