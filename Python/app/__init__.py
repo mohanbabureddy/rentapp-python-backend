@@ -101,17 +101,25 @@ def log_responses(response):
 Base.metadata.create_all(bind=engine)
 
 
-def _ensure_user_full_name_column():
-    # create_all never alters an existing table, so add the column on databases
-    # created before `full_name` existed.
+# Columns added after the first release. create_all never alters an existing
+# table, so a database created earlier (e.g. an old local MySQL) gets them here.
+_LATER_COLUMNS = [
+    ("users", "full_name", "VARCHAR(100)"),
+    ("users", "demanded_deposit", "DOUBLE PRECISION"),
+    ("tenant_bills", "bill_type", "VARCHAR(20) NOT NULL DEFAULT 'RENT'"),
+]
+
+
+def _ensure_later_columns():
     from sqlalchemy import inspect, text
-    if "full_name" not in {c["name"] for c in inspect(engine).get_columns("users")}:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE users ADD COLUMN full_name VARCHAR(100)"))
-        app.logger.info("Added users.full_name column.")
+    for table, column, ddl in _LATER_COLUMNS:
+        if column not in {c["name"] for c in inspect(engine).get_columns(table)}:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+            app.logger.info("Added %s.%s column.", table, column)
 
 
-_ensure_user_full_name_column()
+_ensure_later_columns()
 register_routes(app)
 app.logger.info("Application startup complete")
 
