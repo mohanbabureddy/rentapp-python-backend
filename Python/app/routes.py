@@ -339,6 +339,11 @@ def register_routes(app: Flask) -> None:
             user.password = generate_password_hash(data["password"])
         if data.get("mail"):
             user.mail = data["mail"]
+        if "registrationCompleted" in data:
+            registered = data["registrationCompleted"] is True
+            if not registered and user.role == "ADMIN":
+                return jsonify({"error": "An admin account cannot be set to not registered (you would be locked out)."}), 400
+            user.registration_completed = registered
         # Present-but-empty means "clear it"; absent means "leave it alone".
         if "fullName" in data:
             user.full_name = " ".join(str(data["fullName"] or "").split())[:100] or None

@@ -43,6 +43,24 @@ class UpdateUserClearTest(unittest.TestCase):
         self.assertEqual((user.full_name, user.phone), ("New Name", "9876500000"))
         self.assertEqual(_put({"phone": "12345"}, _user()).status_code, 400)
 
+    def test_registration_status_can_be_reset_and_set(self):
+        user = _user()
+        self.assertEqual(_put({"registrationCompleted": False}, user).status_code, 200)
+        self.assertFalse(user.registration_completed)
+        self.assertEqual(_put({"registrationCompleted": True}, user).status_code, 200)
+        self.assertTrue(user.registration_completed)
+
+    def test_status_left_alone_when_not_sent(self):
+        user = _user()
+        _put({"phone": "9876543210"}, user)
+        self.assertTrue(user.registration_completed)
+
+    def test_an_admin_cannot_be_made_unregistered(self):
+        admin = _user()
+        admin.role = "ADMIN"
+        self.assertEqual(_put({"registrationCompleted": False}, admin).status_code, 400)
+        self.assertTrue(admin.registration_completed)
+
     def test_only_admins_can_update(self):
         self.assertEqual(_put({"phone": ""}, _user(), role="TENANT").status_code, 403)
 
