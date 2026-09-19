@@ -75,5 +75,18 @@ class BillsReplyTest(unittest.TestCase):
         self.assertEqual(_bill_service([]).ask("Room1", "my bills"), "You have no bills yet.")
 
 
+class DepositRefundTest(unittest.TestCase):
+    def test_refund_question_gets_fixed_reply_with_owner_contact(self):
+        users = N(
+            find_by_username=lambda u: N(username=u, full_name="Ravindra", demanded_deposit=20000.0),
+            find_all=lambda: [N(role="ADMIN", username="mohan", full_name="Mohanbabu G", phone="9876543210", mail="o@x.com")],
+        )
+        svc = AssistantService(None, users, N(total_for_tenant=lambda u: 0, find_by_tenant_order_by_date_desc=lambda u: []))
+        for q in ("withdraw my deposit", "refund my security deposit", "I want my deposit back"):
+            reply = svc.ask("Room1", q)
+            self.assertIn("refunds are not processed in this app", reply, q)
+            self.assertIn("Mohanbabu G, phone 9876543210, email o@x.com", reply, q)
+
+
 if __name__ == "__main__":
     unittest.main()

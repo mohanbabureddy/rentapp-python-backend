@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import time
 from datetime import timedelta
 from typing import List, Optional
 
@@ -15,7 +16,8 @@ logger = logging.getLogger("app.assistant")
 MODEL = "claude-opus-5"
 
 DEPOSIT_QUESTION = re.compile(r"deposit|advance", re.I)
-BILLS_QUESTION = re.compile(r"\bbills?\b|\bowe\b|\bdues?\b|outstanding|pending amount|unpaid|how much .*pay", re.I)
+REFUND_QUESTION = re.compile(r"refund|withdraw|return|\bback\b", re.I)
+BILLS_QUESTION =re.compile(r"\bbills?\b|\bowe\b|\bdues?\b|outstanding|pending amount|unpaid|how much .*pay", re.I)
 IST_OFFSET = timedelta(hours=5, minutes=30)
 
 
@@ -34,14 +36,20 @@ class AssistantService:
         self.deposit_repo = deposit_repo
         self.user_repo = user_repo
         self._provider = os.getenv("LLM_PROVIDER", "anthropic").strip().lower()
-        self._ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
-        self._ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+        # Old local defaults (kept for reference):
+        # self._ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+        # self._ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+        self._ollama_url = os.getenv("OLLAMA_URL", "https://ollama.com").rstrip("/")
+        self._ollama_model = os.getenv("OLLAMA_MODEL", "gpt-oss:20b")
+        self._ollama_api_key = os.getenv("OLLAMA_API_KEY")
         api_key = os.getenv("ANTHROPIC_API_KEY")
         self._client = anthropic.Anthropic(api_key=api_key) if api_key else None
 
     def _ask_ollama(self, system_prompt: str, message: str) -> str:
+        headers = {"Authorization": f"Bearer {self._ollama_api_key}"} if self._ollama_api_key else {}
         resp = requests.post(
             f"{self._ollama_url}/api/chat",
+            headers=headers,
             json={
                 "model": self._ollama_model,
                 "stream": False,
@@ -115,6 +123,20 @@ class AssistantService:
             lines += ["", "No deposit payments recorded yet."]
         return "\n".join(lines)
 
+    def _deposit_refund_reply(self) -> str:
+        admin = self._admin_contact()
+        lines = [
+            "Security deposit refunds are not processed in this app. The owner settles your deposit with you directly when you move out.",
+        ]
+        if admin:
+            contact = [admin.full_name or admin.username]
+            if admin.phone:
+                contact.append(f"phone {admin.phone}")
+            if admin.mail:
+                contact.append(f"email {admin.mail}")
+            lines.append("Please contact the owner: " + ", ".join(contact) + ".")
+        return "\n".join(lines)
+
     def _admin_contact(self) -> Optional[User]:
         for user in self.user_repo.find_all():
             if user.role == "ADMIN":
@@ -170,22 +192,45 @@ class AssistantService:
         )
 
     def ask(self, username: str, message: str) -> str:
+        return self.ask_traced(username, message)[0]
+
+    def ask_traced(self, username: str, message: str):
+        """Returns (answer, trace). `trace` is a plain list of step descriptions
+        showing exactly how the question was routed -- shown only in debug mode."""
+        trace: List[str] = []
         if not message or not message.strip():
             raise ValueError("Message required")
+        trace.append(f'Server received: "{message.strip()}"')
 
         tenant = self.user_repo.find_by_username(username)
         if tenant is None:
             raise ValueError("Tenant not found")
+        trace.append(f"Identified tenant from login token: {tenant.username}")
+
         if DEPOSIT_QUESTION.search(message):
-            return self._deposit_reply(tenant)
+            if REFUND_QUESTION.search(message):
+                trace.append("Deposit word + refund/withdraw word found -> fixed refund reply, no AI model used")
+                return self._deposit_refund_reply(), trace
+            trace.append("Deposit word found -> exact reply built from the deposit ledger in the database, no AI model used")
+            return self._deposit_reply(tenant), trace
+        trace.append("No deposit word -> not a deposit question")
+
         bills = self.bill_repo.find_by_tenant_name_order_by_month_desc(username)
+        trace.append(f"Loaded {len(bills)} bill(s) for this tenant from the database")
         if BILLS_QUESTION.search(message):
-            return self._bills_reply(bills)
+            trace.append("Bills word found -> exact reply built from the bills, no AI model used")
+            return self._bills_reply(bills), trace
+        trace.append("No bills word -> not a bills question, so the AI model will answer")
+
         if self._provider != "ollama" and self._client is None:
             raise RuntimeError("The assistant isn't configured yet (missing ANTHROPIC_API_KEY in .env).")
         system_prompt = self._build_system_prompt(tenant, bills)
+        trace.append(f"Built the system prompt ({len(system_prompt)} characters) from the tenant's data:\n{system_prompt}")
 
         logger.info("Assistant question from '%s': %s", username, message[:200])
+        provider = f"Ollama model {self._ollama_model}" if self._provider == "ollama" else f"Anthropic model {MODEL}"
+        trace.append(f"Sending system prompt + question to {provider}")
+        started = time.monotonic()
         try:
             if self._provider == "ollama":
                 answer = self._ask_ollama(system_prompt, message.strip())
@@ -202,5 +247,6 @@ class AssistantService:
             logger.exception("Assistant API call failed for '%s'.", username)
             raise RuntimeError("Assistant is temporarily unavailable. Please try again shortly.")
 
+        trace.append(f"Model replied with {len(answer)} characters in {time.monotonic() - started:.1f}s")
         logger.info("Assistant answered '%s' (%d chars).", username, len(answer))
-        return answer
+        return answer, trace

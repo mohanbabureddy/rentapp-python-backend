@@ -13,6 +13,7 @@ from werkzeug.security import generate_password_hash
 from app.assistant import AssistantService
 from app.auth import generate_token, require_auth, require_role, require_self_or_admin
 from app.database import get_db
+from app.debug_trace import trace_request
 from app.models import Complaint, Occupant, TenantBill, User
 from app.payments import PaymentService
 from app.repositories import ComplaintRepository, DepositRepository, OccupantRepository, TenantBillRepository, TransactionLogRepository, UserRepository
@@ -780,6 +781,7 @@ def register_routes(app: Flask) -> None:
         return jsonify({"message": "Failure logged"}), 200
 
     @app.route("/api/assistant/ask", methods=["POST"])
+    @trace_request
     @require_auth
     def assistant_ask():
         data = request.get_json(silent=True) or {}
@@ -787,8 +789,13 @@ def register_routes(app: Flask) -> None:
         db = get_db()
         service = AssistantService(TenantBillRepository(db), UserRepository(db), DepositRepository(db))
         try:
-            answer = service.ask(g.current_user["username"], message)
-            return jsonify({"answer": answer}), 200
+            answer, trace = service.ask_traced(g.current_user["username"], message)
+            body = {"answer": answer}
+            # Only ever sent when the server itself is started in debug mode
+            # (ASSISTANT_DEBUG=true in the local .env); never on production.
+            if os.getenv("ASSISTANT_DEBUG", "").lower() == "true":
+                body["trace"] = trace
+            return jsonify(body), 200
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         except RuntimeError as exc:
