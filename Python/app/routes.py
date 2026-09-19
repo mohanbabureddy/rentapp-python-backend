@@ -339,13 +339,17 @@ def register_routes(app: Flask) -> None:
             user.password = generate_password_hash(data["password"])
         if data.get("mail"):
             user.mail = data["mail"]
-        if data.get("fullName"):
-            user.full_name = " ".join(str(data["fullName"]).split())[:100]
-        if data.get("phone"):
-            phone = _normalize_phone(data["phone"])
-            if phone is None:
-                return jsonify({"error": "Enter a valid 10-digit mobile number"}), 400
-            user.phone = phone
+        # Present-but-empty means "clear it"; absent means "leave it alone".
+        if "fullName" in data:
+            user.full_name = " ".join(str(data["fullName"] or "").split())[:100] or None
+        if "phone" in data:
+            if str(data["phone"] or "").strip():
+                phone = _normalize_phone(data["phone"])
+                if phone is None:
+                    return jsonify({"error": "Enter a valid 10-digit mobile number"}), 400
+                user.phone = phone
+            else:
+                user.phone = None
         repo.save(user)
         logger.info("Admin updated user '%s' (id=%s, fields=%s).", user.username, user_id, list(data.keys()))
         return jsonify({
