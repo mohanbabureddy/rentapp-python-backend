@@ -22,6 +22,30 @@ if DB_URL.startswith("postgres://"):
 elif DB_URL.startswith("postgresql://"):
     DB_URL = "postgresql+psycopg://" + DB_URL[len("postgresql://"):]
 
+def is_local_db(db_url: str) -> bool:
+    """True for SQLite files and databases on this machine."""
+    from sqlalchemy.engine import make_url
+    url = make_url(db_url)
+    return url.drivername.startswith("sqlite") or (url.host or "") in ("localhost", "127.0.0.1", "::1")
+
+
+def check_environment(app_env: str, db_url: str) -> None:
+    """APP_ENV=local must use a database on this PC; APP_ENV=production must use a
+    hosted one. Stops a local run from touching production data, and stops production
+    silently falling back to an empty SQLite file if DB_URL goes missing. When APP_ENV
+    is not set, nothing is enforced."""
+    app_env = (app_env or "").strip().lower()
+    local = is_local_db(db_url)
+    if app_env == "local" and not local:
+        raise RuntimeError("APP_ENV=local but DB_URL points to a remote database. "
+                           "Local runs must use the MySQL on this PC (see NOTES.md).")
+    if app_env == "production" and local:
+        raise RuntimeError("APP_ENV=production but DB_URL is missing or points to this machine. "
+                           "Production must use the hosted database.")
+
+
+check_environment(os.getenv("APP_ENV", ""), DB_URL)
+
 # PyMySQL has no "ssl_mode" URL param (that's a MySQL Connector/Python-ism) --
 # TLS has to be requested via connect_args instead. DB_SSL_CA holds the PEM
 # certificate content (e.g. Aiven's CA cert) directly, since Render env vars

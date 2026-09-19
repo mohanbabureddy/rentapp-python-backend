@@ -71,3 +71,20 @@ real users can receive email.
 `str(Path(...))` uses backslashes on Windows, which silently breaks both
 Supabase Storage object-key lookups and the `/uploads/...` URL scheme.
 Always build this field with an explicit forward-slash f-string.
+
+## Local vs production settings (database is the only difference)
+
+| | Local (your PC) | Production (Render) |
+|---|---|---|
+| Where settings live | `Python/.env` (git-ignored) and `frontend/.env.development` (git-ignored) | Render service, **Environment** tab |
+| `APP_ENV` | `local` | `production` |
+| `DB_URL` | `mysql+pymysql://root:<password>@localhost:3306/rent_app` | the hosted Supabase Postgres URL |
+| Razorpay, Resend, JWT, LLM keys | same keys | same keys |
+| Uploaded documents | saved in `Python/uploads/` (no `SUPABASE_*` set) | Supabase Storage (`SUPABASE_URL`, `SUPABASE_SERVICE_KEY`) |
+
+- `app/database.py` refuses to start if `APP_ENV=local` points at a remote database, or if
+  `APP_ENV=production` points at this machine / SQLite. If `APP_ENV` is unset nothing is enforced.
+- Never put the Supabase URL in the local `Python/.env`; use the guard error as the reminder.
+- Frontend: `npm start` reads the API address from `frontend/.env.development`; the production
+  build takes `REACT_APP_API_BASE` from Render.
+- Running the local backend: `python -m flask --app app run --port 5000` (needs MySQL running).
